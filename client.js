@@ -45,6 +45,7 @@ window.__ModuleLoader__.load({
         retry: '重试',
         noCatalog: '当前没有可用模型',
         trigger: (name) => `${name}（点此切换模型）`,
+        effortTitle: (name) => `思考档位：${name}（点此调整）`,
         switching: '切换中…',
         switchFailed: '切换失败'
       },
@@ -56,6 +57,7 @@ window.__ModuleLoader__.load({
         retry: 'Retry',
         noCatalog: 'No model is currently available',
         trigger: (name) => `${name} (click to switch model)`,
+        effortTitle: (name) => `Reasoning level: ${name} (click to change)`,
         switching: 'Switching…',
         switchFailed: 'Switch failed'
       }
@@ -64,11 +66,16 @@ window.__ModuleLoader__.load({
     /* Host theme tokens only, plus the two composer variables the row sets when
        its controls no longer fit on one line. */
     const CSS = `
-.dmp-root { position: relative; display: flex; align-items: center; min-width: 0; }
+.dmp-root { position: relative; display: flex; align-items: center; gap: 2px; min-width: 0; }
+/* One popover anchor per control: the model list and the level list open above
+   their own button and never overlap each other. */
+.dmp-control { position: relative; display: flex; align-items: center; min-width: 0; }
 .dmp-trigger { display: flex; align-items: center; gap: 4px; min-width: 0; max-width: min(360px, 45cqw);
   height: 28px; padding: 0 4px 0 8px; border: 0; border-radius: 6px; cursor: pointer;
   background: transparent; color: var(--dsw-alias-label-secondary);
   font: inherit; font-size: 13px; line-height: 20px; }
+.dmp-trigger-effort { max-width: min(150px, 28cqw); padding: 0 4px 0 6px; font-size: 12px;
+  color: var(--dsw-alias-label-secondary); }
 .dmp-trigger:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.12)); }
 .dmp-trigger:disabled { color: var(--dsw-alias-state-idle-primary); cursor: default; }
 .dmp-trigger-icon { display: var(--dsh-composer-model-icon-display, none); flex: none; }
@@ -95,6 +102,10 @@ window.__ModuleLoader__.load({
 .dmp-item:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.12)); }
 .dmp-item-current { color: var(--dsw-alias-brand-primary); font-weight: 600; }
 .dmp-item-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dmp-item-note { margin-left: auto; padding-left: 8px; font-size: 11px;
+  color: var(--dsw-alias-label-secondary); }
+/* The level list holds short labels, so it stays narrow and tight. */
+.dmp-panel-narrow { width: min(220px, 60vw); max-height: 260px; }
 .dmp-note { padding: 10px 12px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
 .dmp-note-error { color: var(--dsw-alias-state-error-primary); }
 .dmp-retry { margin-top: 6px; padding: 4px 10px; border: 1px solid var(--dsw-alias-border-l2);
@@ -149,7 +160,9 @@ window.__ModuleLoader__.load({
       const localeId = typeof props.localeId === 'string' ? props.localeId : 'zh-CN'
       const t = DICT[String(localeId).toLowerCase().startsWith('zh') ? 'zh-CN' : 'en']
 
-      const [open, setOpen] = useState(false)
+      // One panel at a time: the model list and the effort list are separate
+      // controls, and opening either closes the other.
+      const [panel, setPanel] = useState(null)
       const [query, setQuery] = useState('')
       const [catalog, setCatalog] = useState(null)
       const [problem, setProblem] = useState('')
@@ -196,10 +209,10 @@ window.__ModuleLoader__.load({
       }, [remote, reload])
 
       useEffect(() => {
-        if (!open) return undefined
-        const onKey = (event) => { if (event.key === 'Escape') setOpen(false) }
+        if (panel === null) return undefined
+        const onKey = (event) => { if (event.key === 'Escape') setPanel(null) }
         const onClick = (event) => {
-          if (rootRef.current !== null && !rootRef.current.contains(event.target)) setOpen(false)
+          if (rootRef.current !== null && !rootRef.current.contains(event.target)) setPanel(null)
         }
         document.addEventListener('keydown', onKey)
         document.addEventListener('mousedown', onClick)
@@ -207,9 +220,9 @@ window.__ModuleLoader__.load({
           document.removeEventListener('keydown', onKey)
           document.removeEventListener('mousedown', onClick)
         }
-      }, [open])
+      }, [panel])
 
-      const select = useCallback(async (group, model) => {
+      const select = useCallback(async (group, model, reasoningEffort) => {
         const run = remote?.session?.selectModel
         if (typeof run !== 'function') return
         setBusy(true)
@@ -218,13 +231,14 @@ window.__ModuleLoader__.load({
           const result = await run.call(remote.session, {
             sessionId,
             provider: group.id,
-            model: model.id
+            model: model.id,
+            ...reasoningEffort === undefined ? {} : { reasoningEffort }
           })
           if (result?.ok !== true) {
             setProblem(result?.error?.message ?? t.switchFailed)
             return
           }
-          setOpen(false)
+          setPanel(null)
         } catch (error) {
           setProblem(error instanceof Error ? error.message : String(error))
         } finally {
@@ -248,6 +262,18 @@ window.__ModuleLoader__.load({
         ?.find((model) => model.id === selection.model)
       const currentGroup = selection === null ? null : groups.find((group) => group.id === selection.provider) ?? null
       const currentLabel = current?.name ?? selection?.model ?? t.noCatalog
+
+      /**
+       * Reasoning levels of the selected model.
+       *
+       * The catalogue entry carries `reasoning: { efforts, defaultEffort }`. An
+       * explicit choice wins; otherwise the adapter's default is what the next
+       * call will use, so that is what the control shows rather than a blank.
+       */
+      const efforts = Array.isArray(current?.reasoning?.efforts) ? current.reasoning.efforts : []
+      const activeEffortId = selection?.reasoningEffort ?? current?.reasoning?.defaultEffort
+      const activeEffort = efforts.find((effort) => effort.id === activeEffortId) ?? null
+      const effortName = (effort) => effort?.name ?? effort?.id ?? String(activeEffortId ?? '')
 
       /**
        * The inline decoration point.
@@ -297,38 +323,77 @@ window.__ModuleLoader__.load({
         notes.push(h('div', { key: 'empty', className: 'dmp-note' }, t.empty))
       }
 
+      const effortButton = current === null || currentGroup === null || efforts.length === 0
+        ? null
+        : h('button', {
+          type: 'button',
+          className: 'dmp-trigger dmp-trigger-effort',
+          disabled: locked === true || busy,
+          title: t.effortTitle(effortName(activeEffort)),
+          'aria-haspopup': 'listbox',
+          'aria-expanded': panel === 'effort',
+          onClick: () => setPanel((value) => (value === 'effort' ? null : 'effort'))
+        },
+          h('span', { className: 'dmp-trigger-text' }, effortName(activeEffort)),
+          h(Chevron, { open: panel === 'effort' }))
+
+      const effortPanel = panel === 'effort' && effortButton !== null
+        ? h('div', { className: 'dmp-panel dmp-panel-narrow', role: 'listbox' },
+          h('div', { className: 'dmp-list' }, efforts.map((effort) => {
+            const isCurrent = effort.id === activeEffortId
+            return h('button', {
+              key: effort.id,
+              type: 'button',
+              role: 'option',
+              'aria-selected': isCurrent,
+              className: `dmp-item${isCurrent ? ' dmp-item-current' : ''}`,
+              onClick: () => void select(currentGroup, current, effort.id)
+            }, h('span', { className: 'dmp-item-name' }, effortName(effort)),
+            effort.description === undefined
+              ? null
+              : h('span', { className: 'dmp-item-note' }, String(effort.description)))
+          })))
+        : null
+
+      const modelPanel = panel === 'model'
+        ? h('div', { className: 'dmp-panel', role: 'listbox' },
+          h('div', { className: 'dmp-search' },
+            h('input', {
+              type: 'search',
+              value: query,
+              placeholder: t.placeholder,
+              'aria-label': t.placeholder,
+              autoFocus: true,
+              onChange: (event) => setQuery(event.target.value)
+            })),
+          notes,
+          h('div', { className: 'dmp-list' }, filtered.map(renderGroup)))
+        : null
+
       return h('div', { className: 'dmp-root', ref: rootRef },
         h('style', null, CSS),
-        h('button', {
-          type: 'button',
-          className: 'dmp-trigger',
-          disabled: locked === true || busy,
-          title: t.trigger(currentLabel),
-          'aria-haspopup': 'listbox',
-          'aria-expanded': open,
-          onClick: () => setOpen((value) => !value)
-        },
-          h('span', { className: 'dmp-trigger-text' },
-            busy
-              ? t.switching
-              : (current === null || currentGroup === null
-                ? currentLabel
-                : renderLabel(currentGroup, current, 'trigger', true))),
-          h(Chevron, { open })),
-        open
-          ? h('div', { className: 'dmp-panel', role: 'listbox' },
-            h('div', { className: 'dmp-search' },
-              h('input', {
-                type: 'search',
-                value: query,
-                placeholder: t.placeholder,
-                'aria-label': t.placeholder,
-                autoFocus: true,
-                onChange: (event) => setQuery(event.target.value)
-              })),
-            notes,
-            h('div', { className: 'dmp-list' }, filtered.map(renderGroup)))
-          : null)
+        // The model control and the reasoning-level control are deliberately two
+        // buttons: they are two independent choices, and a model change must not
+        // silently drag the level along with it.
+        h('div', { className: 'dmp-control' },
+          h('button', {
+            type: 'button',
+            className: 'dmp-trigger',
+            disabled: locked === true || busy,
+            title: t.trigger(currentLabel),
+            'aria-haspopup': 'listbox',
+            'aria-expanded': panel === 'model',
+            onClick: () => setPanel((value) => (value === 'model' ? null : 'model'))
+          },
+            h('span', { className: 'dmp-trigger-text' },
+              busy
+                ? t.switching
+                : (current === null || currentGroup === null
+                  ? currentLabel
+                  : renderLabel(currentGroup, current, 'trigger', true))),
+            h(Chevron, { open: panel === 'model' })),
+          modelPanel),
+        effortButton === null ? null : h('div', { className: 'dmp-control' }, effortButton, effortPanel))
     }
 
     return {

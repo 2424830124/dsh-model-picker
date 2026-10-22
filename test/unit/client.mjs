@@ -51,7 +51,14 @@ const selectCalls = []
 const catalog = {
   groups: [
     { id: 'workbuddy-cn', name: 'WorkBuddy (Mainland)', models: [
-      { id: 'hy3', name: 'Hy3' },
+      {
+        id: 'hy3',
+        name: 'Hy3',
+        reasoning: {
+          efforts: [{ id: 'low', name: '快速' }, { id: 'high', name: '深思' }],
+          defaultEffort: 'low'
+        }
+      },
       { id: 'glm-5.3', name: 'GLM-5.3' }
     ] },
     { id: 'deepseek-account', name: 'DeepSeek', models: [{ id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' }] }
@@ -156,11 +163,11 @@ hookIndex = 0
 const loadedTree = component(props)
 assert.ok(texts(loadedTree).some((text) => text.includes('Hy3')), 'the loaded catalogue names the current model')
 
-// Pass 3: opening the panel renders the groups; the miniature React has no
+// Pass 3: opening the model panel renders the groups; the miniature React has no
 // reactivity, so the click is applied and the component rendered again.
-const trigger = collect(loadedTree).find((node) => node.type === 'button' && node.props['aria-haspopup'] === 'listbox')
-assert.ok(trigger, 'the trigger advertises the listbox it opens')
-trigger.props.onClick()
+const triggers = collect(loadedTree).filter((node) => node.type === 'button' && node.props['aria-haspopup'] === 'listbox')
+assert.equal(triggers.length, 2, 'the model and the reasoning level are two separate controls')
+triggers[0].props.onClick()
 hookIndex = 0
 const tree = component(props)
 
@@ -186,6 +193,22 @@ await optionButtons[1].props.onClick()
 await new Promise((resolve) => setTimeout(resolve, 0))
 assert.deepEqual(selectCalls, [{ sessionId: 'session-1', provider: 'workbuddy-cn', model: 'glm-5.3' }],
   'choosing a model calls session.selectModel with the session, provider and model')
+
+// The level control: its own button, its own list, and it carries the level.
+hookIndex = 0
+const idleTree = component(props)
+const levelTrigger = collect(idleTree)
+  .filter((node) => node.type === 'button' && node.props['aria-haspopup'] === 'listbox')[1]
+assert.ok(texts(idleTree).some((text) => text.includes('快速')), 'the level control shows the level in effect (the adapter default)')
+levelTrigger.props.onClick()
+hookIndex = 0
+const levelTree = component(props)
+const levelOptions = collect(levelTree).filter((node) => node.type === 'button' && node.props.role === 'option')
+assert.equal(levelOptions.length, 2, 'every level of the selected model is offered')
+await levelOptions[1].props.onClick()
+await new Promise((resolve) => setTimeout(resolve, 0))
+assert.deepEqual(selectCalls[1], { sessionId: 'session-1', provider: 'workbuddy-cn', model: 'hy3', reasoningEffort: 'high' },
+  'choosing a level keeps the model and adds the reasoning effort')
 
 // The other locale is wired too (the panel starts closed, so open it first).
 const english = mount('en-US')
