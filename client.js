@@ -29,6 +29,16 @@
  * pair tells the two cases apart immediately.
  */
 const report = (stage) => {
+  // The renderer console reaches the desktop app log (`source: "renderer",
+  // event: "console"`), which is captured in every diagnostics bundle. A POST to
+  // the Host half is kept as the richer channel, but it cannot be the only one:
+  // it is a second thing that can fail (trust fence, no route yet, offline), and
+  // a missing report then looks exactly like "apply was never called".
+  try {
+    console.error(`[model-picker] ${stage}`)
+  } catch {
+    // no console in some hosts
+  }
   try {
     void fetch('/model-picker/client-log', {
       method: 'POST',
@@ -447,39 +457,59 @@ window.__ModuleLoader__.load({
 
     return {
       name: PLUGIN,
-      inject: ['slots'],
+      /**
+       * No fiber-level `inject`.
+       *
+       * A required service that is not visible from this context keeps the whole
+       * entry in `loading`: Cordis never calls `apply`, and the client Loader
+       * turns that into `web boot: 1 entry did not activate`, i.e. a dead
+       * renderer. Waiting *inside* apply means an unmet dependency costs only
+       * the registration instead of the entire boot.
+       */
       apply(ctx) {
-        report(`apply 已调用（slots=${ctx.slots === undefined ? '缺失' : '就绪'}，remote=${ctx.remote === undefined ? '缺失' : '就绪'}）`)
-        try {
-          const locale = ctx.get('locale')
-          const localeId = typeof locale?.getLocale === 'function'
-            ? String(locale.getLocale()?.locale ?? 'zh-CN')
-            : 'zh-CN'
+        report(`apply 已调用（slots=${ctx.get('slots') === undefined ? '尚未就绪' : '就绪'}）`)
 
-          ctx.slots.inject(SLOT, () => {
-            report('槽位回调已运行，准备注册 occupant')
-            const dispose = ctx.slots.register({
-              name: SLOT,
-              priority: SHADOW_PRIORITY,
-              // The child declaration is the compatibility contract: without it every
-              // provider plugin's inline decoration loses its slot and disappears.
-              children: {
-                [LABEL_SLOT]: { kind: 'single', scope: 'session', inline: true }
-              },
-              inject: (sessionId) => ({
-                sessionId,
-                localeId,
-                remote: ctx.remote,
-                sessions: ctx.get('sessions')
-              })
-            }, ModelPicker)
-            report('occupant 已注册（priority ' + SHADOW_PRIORITY + '）')
-            return dispose
-          })
-        } catch (error) {
-          report(`apply 抛错：${error instanceof Error ? `${error.message}` : String(error)}`)
-          throw error
+        const install = (scope) => {
+          try {
+            const slots = (scope ?? ctx).slots ?? ctx.get('slots')
+            if (slots === undefined) {
+              report('slots 服务仍不可用，槽位未注册')
+              return
+            }
+            const locale = ctx.get('locale')
+            const localeId = typeof locale?.getLocale === 'function'
+              ? String(locale.getLocale()?.locale ?? 'zh-CN')
+              : 'zh-CN'
+
+            slots.inject(SLOT, () => {
+              report('槽位回调已运行，准备注册 occupant')
+              const dispose = slots.register({
+                name: SLOT,
+                priority: SHADOW_PRIORITY,
+                // The child declaration is the compatibility contract: without it every
+                // provider plugin's inline decoration loses its slot and disappears.
+                children: {
+                  [LABEL_SLOT]: { kind: 'single', scope: 'session', inline: true }
+                },
+                inject: (sessionId) => ({
+                  sessionId,
+                  localeId,
+                  remote: ctx.remote,
+                  sessions: ctx.get('sessions')
+                })
+              }, ModelPicker)
+              report('occupant 已注册（priority ' + SHADOW_PRIORITY + '）')
+              return dispose
+            })
+          } catch (error) {
+            report(`槽位注册抛错：${error instanceof Error ? `${error.message}` : String(error)}`)
+          }
         }
+
+        // Soft wait: `apply` has already run, so a service that never shows up
+        // can no longer fail the boot.
+        if (typeof ctx.inject === 'function') ctx.inject(['slots'], install)
+        else install(ctx)
       }
     }
   }

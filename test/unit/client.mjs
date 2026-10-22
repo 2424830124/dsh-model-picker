@@ -92,28 +92,43 @@ const plugin = loaded.factory((name) => {
   if (name === 'react') return React
   throw new Error(`unexpected require: ${name}`)
 })
-assert.deepEqual(plugin.inject, ['slots'], 'the client half needs the slot service')
+// No fiber-level `inject`, on purpose.
+//
+// A required service that this context cannot see keeps the whole entry in
+// `loading`: Cordis never calls `apply`, and the client Loader reports that as
+// `web boot: 1 entry did not activate` — a renderer that never comes up. That is
+// a UI plugin taking the entire boot hostage over a slot registration, so the
+// slot service is awaited *inside* apply instead: an unmet dependency then costs
+// only the registration.
+assert.equal(plugin.inject, undefined, 'the client half declares no fiber-level dependency')
 
 /** Mount the plugin against a locale and return its slot registration. */
 function mount(locale) {
   const registrations = []
+  const waited = []
+  const slots = {
+    register: (options, component) => { registrations.push({ options, component }); return () => {} },
+    inject: (slot, callback) => {
+      assert.equal(slot, 'conversation.input.model')
+      callback()
+      return () => {}
+    }
+  }
   const ctx = {
     get: (name) => {
       if (name === 'locale') return { getLocale: () => ({ locale }) }
       if (name === 'sessions') return sessions
+      if (name === 'slots') return slots
       return undefined
     },
     remote,
-    slots: {
-      register: (options, component) => { registrations.push({ options, component }); return () => {} },
-      inject: (slot, callback) => {
-        assert.equal(slot, 'conversation.input.model')
-        callback()
-        return () => {}
-      }
-    }
+    slots,
+    // The soft wait: apply asks the composition to run the install once the
+    // service is visible, instead of making it a requirement of the fiber.
+    inject: (deps, callback) => { waited.push(deps); callback(ctx) }
   }
   plugin.apply(ctx)
+  assert.deepEqual(waited, [['slots']], 'apply waits for the slot service without requiring it')
   assert.equal(registrations.length, 1)
   return registrations[0]
 }
