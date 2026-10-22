@@ -90,10 +90,15 @@ window.__ModuleLoader__.load({
     const SLOT = 'conversation.input.model'
     const LABEL_SLOT = 'conversation.input.model.label'
     /**
-     * Above the shipped occupant's `priority: 0`: for a `single` slot the highest
-     * priority wins, which is how a plugin shadows shipped UI on purpose.
+     * BELOW the shipped occupant's `priority: 0`.
+     *
+     * For a `single` slot the LOWEST priority renders — the registry says so in
+     * its own error text ("register at a different priority to shadow it (lowest
+     * renders)"), and `entriesOfSlot` returns the first survivor of a
+     * priority-sorted list. A larger number would have lost to the shipped
+     * picker instead of shadowing it.
      */
-    const SHADOW_PRIORITY = 100
+    const SHADOW_PRIORITY = -1
 
     const DICT = {
       'zh-CN': {
@@ -471,7 +476,8 @@ window.__ModuleLoader__.load({
 
         const install = (scope) => {
           try {
-            const slots = (scope ?? ctx).slots ?? ctx.get('slots')
+            const at = scope ?? ctx
+            const slots = at.slots ?? ctx.get('slots')
             if (slots === undefined) {
               report('slots 服务仍不可用，槽位未注册')
               return
@@ -480,21 +486,42 @@ window.__ModuleLoader__.load({
             const localeId = typeof locale?.getLocale === 'function'
               ? String(locale.getLocale()?.locale ?? 'zh-CN')
               : 'zh-CN'
+            /**
+             * `ctx.remote` cannot be read through the property proxy without an
+             * `inject` entry — Cordis throws `cannot get property "remote" without
+             * inject`, which crashed this component on its first render and got the
+             * entry abdicated (the `active: false` in the slot snapshot).
+             *
+             * `ctx.get('remote')` returns `undefined` instead of throwing, so the
+             * picker degrades to its "could not load the model list" state rather
+             * than taking the whole slot down. The service is also named in the
+             * soft wait below so it is normally present by the time this runs.
+             */
+            const remote = at.remote ?? ctx.get('remote')
 
             slots.inject(SLOT, () => {
               report('槽位回调已运行，准备注册 occupant')
+              /**
+               * NO `children` declaration, on purpose.
+               *
+               * A child slot may be declared exactly once
+               * (`slot "..." is already declared`), and the shipped picker already
+               * declares `conversation.input.model.label` for its own occupant.
+               * Declaring it here threw during registration, which is what removed
+               * the shipped occupant and left the slot empty.
+               *
+               * The consequence is that provider decorations mounted on the label
+               * child do not render while this picker is in charge. Rendering them
+               * would require owning the declaration, i.e. the shipped
+               * `ui-model-selection` occupant being absent entirely.
+               */
               const dispose = slots.register({
                 name: SLOT,
                 priority: SHADOW_PRIORITY,
-                // The child declaration is the compatibility contract: without it every
-                // provider plugin's inline decoration loses its slot and disappears.
-                children: {
-                  [LABEL_SLOT]: { kind: 'single', scope: 'session', inline: true }
-                },
                 inject: (sessionId) => ({
                   sessionId,
                   localeId,
-                  remote: ctx.remote,
+                  remote,
                   sessions: ctx.get('sessions')
                 })
               }, ModelPicker)
@@ -507,8 +534,10 @@ window.__ModuleLoader__.load({
         }
 
         // Soft wait: `apply` has already run, so a service that never shows up
-        // can no longer fail the boot.
-        if (typeof ctx.inject === 'function') ctx.inject(['slots'], install)
+        // can no longer fail the boot. `remote` is included because the picker
+        // cannot do anything without it, and waiting here keeps the failure to a
+        // missing control instead of a crashed one.
+        if (typeof ctx.inject === 'function') ctx.inject(['slots', 'remote'], install)
         else install(ctx)
       }
     }

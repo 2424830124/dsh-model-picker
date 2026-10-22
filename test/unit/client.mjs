@@ -128,18 +128,20 @@ function mount(locale) {
     inject: (deps, callback) => { waited.push(deps); callback(ctx) }
   }
   plugin.apply(ctx)
-  assert.deepEqual(waited, [['slots']], 'apply waits for the slot service without requiring it')
+  assert.deepEqual(waited, [['slots', 'remote']], 'apply waits for the slot and remote services without requiring them')
   assert.equal(registrations.length, 1)
   return registrations[0]
 }
 
 const { options, component } = mount('zh-CN')
 
-// The declaration that keeps every provider decoration alive.
-assert.ok(options.priority > 0, 'a priority above the shipped occupant is what shadows it')
-assert.deepEqual(options.children, {
-  'conversation.input.model.label': { kind: 'single', scope: 'session', inline: true }
-}, 'the inline label slot is re-declared with the shipped kind, scope and inline flag')
+// LOWEST priority renders, so shadowing means going below the shipped 0.
+assert.ok(options.priority < 0, 'a priority below the shipped occupant is what shadows it')
+
+// No child declaration: the shipped occupant already declares the label slot,
+// and a second declaration throws (`slot "..." is already declared`) — which is
+// what used to remove the shipped occupant and leave the slot empty.
+assert.equal(options.children, undefined, 'the label child slot is left to the shipped occupant')
 
 const props = {
   sessionId: 'session-1',
