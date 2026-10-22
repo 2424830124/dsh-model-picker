@@ -1,0 +1,4 @@
+- insert:
+    - id: dsh-model-picker
+      name: '@huai_xin/dsh-model-picker'
+      config: {}

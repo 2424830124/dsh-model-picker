@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Model Picker",
+    "description": "Replaces the composer's model selector with a searchable, provider-grouped picker."
+  }
+}
