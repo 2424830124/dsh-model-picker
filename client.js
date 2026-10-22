@@ -43,6 +43,31 @@ const report = (stage) => {
 
 report('client.js 已执行，开始注册 factory')
 
+/**
+ * The failure worth capturing happens *outside* apply: the client composition
+ * builds this plugin object, then never applies it, and whatever it threw on the
+ * way is only visible in the page — which the packaged desktop app gives no
+ * devtools for. Both global hooks forward to the host log instead.
+ */
+const describe = (value) => {
+  if (value instanceof Error) return `${value.name}: ${value.message}`
+  try {
+    return typeof value === 'string' ? value : JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+try {
+  window.addEventListener('error', (event) => {
+    report(`页面 error：${describe(event?.error ?? event?.message)}`)
+  })
+  window.addEventListener('unhandledrejection', (event) => {
+    report(`页面 unhandledrejection：${describe(event?.reason)}`)
+  })
+} catch {
+  // a missing window hook must never stop the plugin from registering
+}
+
 window.__ModuleLoader__.load({
   id: '@huai_xin/dsh-model-picker',
   factory(require) {
