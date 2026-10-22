@@ -228,6 +228,12 @@ assert.equal(englishBox?.props.placeholder, 'Search models', 'the English dictio
 // ---------------------------------------------------------------------------
 assert.equal(pkg.dsh.bundle.patch, './cordis.patch.yml')
 assert.equal(pkg.dsh.client.platform, 'web')
+// The client-module scanner locates a package with
+// `createRequire(...).resolve('<name>/package.json')` and silently skips the entry
+// when that throws, so a missing self-export means the client half is never served:
+// no error anywhere, the plugin simply never reaches the browser.
+assert.equal(pkg.exports['./package.json'], './package.json', 'the manifest must export itself for the client-module scanner')
+assert.equal(pkg.exports['./client'], './client.js', 'the client entry must stay exported')
 assert.ok(pkg.files.includes('client.js') && pkg.files.includes('icon.svg'), 'every runtime file and asset ships')
 assert.ok(pkg.files.includes('locale/*.json'))
 assert.ok(existsSync(new URL('cordis.patch.yml', root)), 'the patch exists')

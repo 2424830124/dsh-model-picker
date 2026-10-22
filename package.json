@@ -7,6 +7,7 @@
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
+    "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg"
   },
@@ -14,6 +15,7 @@
     "index.js",
     "client.js",
     "cordis.patch.yml",
+    "package.json",
     "locale/*.json",
     "icon.svg",
     "README.md"

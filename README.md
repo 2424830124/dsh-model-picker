@@ -15,6 +15,19 @@ dsh plugin --profile <profile> add <包名>                        # 发布后
 
 装完**刷新页面**（客户端模块在页面启动时加载）。
 
+## 两个"静默失效"的坑（都踩过）
+
+1. **`exports` 必须包含 `"./package.json": "./package.json"`。**
+   客户端模块扫描器是用 `createRequire(...).resolve('<包名>/package.json')` 定位包的，
+   解析失败就**直接跳过这个 entry**——没有报错、没有日志，插件只是永远不出现在浏览器里。
+   （`test/unit/client.mjs` 里钉住了这一条；skill 自带的模板恰好缺它。）
+2. **`dsh.client.inject` 里的依赖必须真实存在**，而且客户端半边要等宿主重启后才会被收录：
+   改完 `client.js` 只刷新页面，常常还是旧的。
+
+排查用：宿主日志里的 `[model-picker] host 半边已 apply`（宿主侧）与
+`[model-picker] 客户端自检：…`（浏览器侧各阶段上报，见 `index.js` 的路由）。
+宿主那行有、客户端一行都没有 ⇒ 模块没被下发；两行都有 ⇒ 再看是不是样式问题。
+
 ## 它如何与"装饰类"插件共存
 
 官方 picker 自己**声明**了子槽位 `conversation.input.model.label`，provider 插件往那里挂装饰（可用性、促销、繁忙度…）。
