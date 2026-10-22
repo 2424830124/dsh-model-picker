@@ -15,18 +15,31 @@ dsh plugin --profile <profile> add <包名>                        # 发布后
 
 装完**刷新页面**（客户端模块在页面启动时加载）。
 
-## 两个"静默失效"的坑（都踩过）
+## 三个"很难查"的坑（都踩过）
 
 1. **`exports` 必须包含 `"./package.json": "./package.json"`。**
    客户端模块扫描器是用 `createRequire(...).resolve('<包名>/package.json')` 定位包的，
    解析失败就**直接跳过这个 entry**——没有报错、没有日志，插件只是永远不出现在浏览器里。
    （`test/unit/client.mjs` 里钉住了这一条；skill 自带的模板恰好缺它。）
-2. **`dsh.client.inject` 里的依赖必须真实存在**，而且客户端半边要等宿主重启后才会被收录：
-   改完 `client.js` 只刷新页面，常常还是旧的。
+2. **`dsh.client.inject` 不要写"你以为需要的插件"。**
+   它是一条**必须被满足的依赖边**：写了一个本组合里永远不会激活的 id，客户端 Loader 会让这个 entry
+   永远停在 `loading`，然后 DSH 直接启动失败：
+
+   ```
+   Error: web boot: 1 entry did not activate
+   @huai_xin/dsh-model-picker: loading
+   RendererStartupFailure: Renderer boot failed for 1 plugin(s)
+   ```
+
+   本插件要的是**槽位**，不是声明槽位的那个插件：`ctx.slots.inject(key, cb)` 自己会等声明，
+   所以这里保持空数组即可。
+3. **客户端半边要等宿主重启后才会被收录**：改完 `client.js` 只刷新页面，常常还是旧的。
 
 排查用：宿主日志里的 `[model-picker] host 半边已 apply`（宿主侧）与
 `[model-picker] 客户端自检：…`（浏览器侧各阶段上报，见 `index.js` 的路由）。
-宿主那行有、客户端一行都没有 ⇒ 模块没被下发；两行都有 ⇒ 再看是不是样式问题。
+宿主那行有、客户端一行都没有 ⇒ 模块没被下发；只有 `factory 已运行` 而没有 `apply 已调用`
+⇒ entry 卡在依赖上（就是第 2 条）。启动失败时 `%APPDATA%/DSH Desktop/diagnostics/*.zip`
+里的 `dsh-*.error.log` 会指名是哪个 entry。
 
 ## 它如何与"装饰类"插件共存
 
