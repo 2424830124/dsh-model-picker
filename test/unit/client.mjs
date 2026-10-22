@@ -234,6 +234,11 @@ assert.equal(pkg.dsh.client.platform, 'web')
 // no error anywhere, the plugin simply never reaches the browser.
 assert.equal(pkg.exports['./package.json'], './package.json', 'the manifest must export itself for the client-module scanner')
 assert.equal(pkg.exports['./client'], './client.js', 'the client entry must stay exported')
+// No client-plugin dependency is declared on purpose. This plugin needs the slot,
+// not the plugin that declares it: `ctx.slots.inject` already waits for the
+// declaration, so an `inject` entry would only add an ordering edge for the client
+// composition to satisfy — and one it failed on.
+assert.deepEqual(pkg.dsh.client.inject, [], 'the client half declares no plugin dependency')
 assert.ok(pkg.files.includes('client.js') && pkg.files.includes('icon.svg'), 'every runtime file and asset ships')
 assert.ok(pkg.files.includes('locale/*.json'))
 assert.ok(existsSync(new URL('cordis.patch.yml', root)), 'the patch exists')
