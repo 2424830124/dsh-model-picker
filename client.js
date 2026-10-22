@@ -20,9 +20,33 @@
  * notification that keeps the shipped directory fresh.
  */
 
+/**
+ * Load-stage report.
+ *
+ * The packaged desktop app has no devtools, so a client half that fails to
+ * register is indistinguishable from one that never loaded. Each stage is posted
+ * to the Host half, which logs it next to its own `host 半边已 apply` line: the
+ * pair tells the two cases apart immediately.
+ */
+const report = (stage) => {
+  try {
+    void fetch('/model-picker/client-log', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ stage }),
+      keepalive: true
+    }).catch(() => {})
+  } catch {
+    // diagnostics must never break the picker
+  }
+}
+
+report('client.js 已执行，开始注册 factory')
+
 window.__ModuleLoader__.load({
   id: '@huai_xin/dsh-model-picker',
   factory(require) {
+    report('factory 已运行，正在装配插件对象')
     const React = require('react')
     const h = React.createElement
     const { useCallback, useEffect, useMemo, useRef, useState } = React
@@ -400,26 +424,37 @@ window.__ModuleLoader__.load({
       name: PLUGIN,
       inject: ['slots'],
       apply(ctx) {
-        const locale = ctx.get('locale')
-        const localeId = typeof locale?.getLocale === 'function'
-          ? String(locale.getLocale()?.locale ?? 'zh-CN')
-          : 'zh-CN'
+        report(`apply 已调用（slots=${ctx.slots === undefined ? '缺失' : '就绪'}，remote=${ctx.remote === undefined ? '缺失' : '就绪'}）`)
+        try {
+          const locale = ctx.get('locale')
+          const localeId = typeof locale?.getLocale === 'function'
+            ? String(locale.getLocale()?.locale ?? 'zh-CN')
+            : 'zh-CN'
 
-        ctx.slots.inject(SLOT, () => ctx.slots.register({
-          name: SLOT,
-          priority: SHADOW_PRIORITY,
-          // The child declaration is the compatibility contract: without it every
-          // provider plugin's inline decoration loses its slot and disappears.
-          children: {
-            [LABEL_SLOT]: { kind: 'single', scope: 'session', inline: true }
-          },
-          inject: (sessionId) => ({
-            sessionId,
-            localeId,
-            remote: ctx.remote,
-            sessions: ctx.get('sessions')
+          ctx.slots.inject(SLOT, () => {
+            report('槽位回调已运行，准备注册 occupant')
+            const dispose = ctx.slots.register({
+              name: SLOT,
+              priority: SHADOW_PRIORITY,
+              // The child declaration is the compatibility contract: without it every
+              // provider plugin's inline decoration loses its slot and disappears.
+              children: {
+                [LABEL_SLOT]: { kind: 'single', scope: 'session', inline: true }
+              },
+              inject: (sessionId) => ({
+                sessionId,
+                localeId,
+                remote: ctx.remote,
+                sessions: ctx.get('sessions')
+              })
+            }, ModelPicker)
+            report('occupant 已注册（priority ' + SHADOW_PRIORITY + '）')
+            return dispose
           })
-        }, ModelPicker))
+        } catch (error) {
+          report(`apply 抛错：${error instanceof Error ? `${error.message}` : String(error)}`)
+          throw error
+        }
       }
     }
   }
