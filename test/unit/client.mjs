@@ -119,6 +119,11 @@ function mount(locale) {
       if (name === 'locale') return { getLocale: () => ({ locale }) }
       if (name === 'sessions') return sessions
       if (name === 'slots') return slots
+      // `remote.session` is its own service: reading it off `remote` through the
+      // Cordis proxy throws without an `inject` entry, which is what crashed the
+      // component. The picker takes it from the service table instead.
+      if (name === 'remote') return remote
+      if (name === 'remote.session') return remote.session
       return undefined
     },
     remote,
@@ -128,7 +133,8 @@ function mount(locale) {
     inject: (deps, callback) => { waited.push(deps); callback(ctx) }
   }
   plugin.apply(ctx)
-  assert.deepEqual(waited, [['slots', 'remote']], 'apply waits for the slot and remote services without requiring them')
+  assert.deepEqual(waited, [['slots', 'remote', 'remote.session']],
+    'apply waits for the slot and both remote services without requiring them')
   assert.equal(registrations.length, 1)
   return registrations[0]
 }

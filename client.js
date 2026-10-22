@@ -487,17 +487,19 @@ window.__ModuleLoader__.load({
               ? String(locale.getLocale()?.locale ?? 'zh-CN')
               : 'zh-CN'
             /**
-             * `ctx.remote` cannot be read through the property proxy without an
-             * `inject` entry — Cordis throws `cannot get property "remote" without
-             * inject`, which crashed this component on its first render and got the
-             * entry abdicated (the `active: false` in the slot snapshot).
+             * Neither `ctx.remote` nor `ctx.remote.session` can be read through
+             * the property proxy without an `inject` entry — Cordis throws
+             * `cannot get property "remote.session" without inject`, which crashed
+             * this component on its first render and got the entry abdicated (the
+             * `active: false` in the slot snapshot).
              *
-             * `ctx.get('remote')` returns `undefined` instead of throwing, so the
-             * picker degrades to its "could not load the model list" state rather
-             * than taking the whole slot down. The service is also named in the
-             * soft wait below so it is normally present by the time this runs.
+             * `ctx.get(...)` returns `undefined` instead of throwing, so the picker
+             * degrades to its "could not load the model list" state rather than
+             * taking the whole slot down. Both names are in the soft wait below so
+             * they are normally present by the time this runs.
              */
             const remote = at.remote ?? ctx.get('remote')
+            const remoteSession = at['remote.session'] ?? ctx.get('remote.session') ?? remote?.session
 
             slots.inject(SLOT, () => {
               report('槽位回调已运行，准备注册 occupant')
@@ -522,6 +524,7 @@ window.__ModuleLoader__.load({
                   sessionId,
                   localeId,
                   remote,
+                  remoteSession,
                   sessions: ctx.get('sessions')
                 })
               }, ModelPicker)
@@ -534,10 +537,10 @@ window.__ModuleLoader__.load({
         }
 
         // Soft wait: `apply` has already run, so a service that never shows up
-        // can no longer fail the boot. `remote` is included because the picker
-        // cannot do anything without it, and waiting here keeps the failure to a
+        // can no longer fail the boot. The remotes are included because the picker
+        // cannot do anything without them, and waiting here keeps the failure to a
         // missing control instead of a crashed one.
-        if (typeof ctx.inject === 'function') ctx.inject(['slots', 'remote'], install)
+        if (typeof ctx.inject === 'function') ctx.inject(['slots', 'remote', 'remote.session'], install)
         else install(ctx)
       }
     }
