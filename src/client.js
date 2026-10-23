@@ -1,41 +1,36 @@
 /**
  * Client entry: the module-loader registration and the plugin object.
  *
- * This file is the only browser entry the Client module loader knows about for
- * this package. Everything it uses lives in sibling modules under `src/`, and
- * `scripts/build.mjs` concatenates them into the served `client.js`.
+ * This plugin replaces ONLY the composer's model-selection UI. Everything behind
+ * it — the per-session directory, the catalogue cache, the invalidation events,
+ * the selection RPC — is the shipped `ui-model-selection` implementation, reached
+ * through its `modelDirectories` service.
  *
- * Why the picker shadows this slot at all: `conversation.input.model` is a
- * `single` slot whose shipped occupant carries `replaceRisk: shadows-shipped-ui`.
- * Shadowing it is a visual choice, so it lives in a bundle that can be turned
- * off again without touching any provider registration.
+ * That split works because the shipped plugin keeps its slot registration and its
+ * component apart: the registration's `inject` hands the component a plain props
+ * bundle (`available`, a `directory` store, `load`, `select`), and the component
+ * may render however it likes. This entry registers the same slot with the same
+ * `inject` contract and substitutes its own component.
  *
- * On the `conversation.input.model.label` child slot: the shipped picker declares
- * it and provider plugins decorate it. This picker cannot join them — a child
- * slot may be declared exactly once and the shipped occupant keeps its
- * declaration even while shadowed, so a second declaration throws at
- * registration. The renderer then hands an entry a `renderSlot` binding only for
- * children that entry declared itself, so not declaring means not rendering. The
- * decorations therefore do not appear here and each model is shown by its plain
- * name. That is an accepted consequence of shadowing this slot, not an oversight.
+ * Why not copy the shipped bundle instead: a copy registers a second
+ * `ModelDirectoryResolver` under the same service name, the two fight over it,
+ * and the shipped plugin parks in `loading` — which fails the whole renderer
+ * boot. Reusing the service avoids that, and keeps tracking upstream fixes.
  */
-import { createCatalog } from './core/catalog.js'
-import { createDirectoryService } from './core/directories.js'
-import { isAvailable } from './core/selection.js'
 import { createModelPicker } from './ui/ModelPicker.js'
 
 const PLUGIN = 'dsh-model-picker'
 const SLOT = 'conversation.input.model'
-/** The shipped service that owns per-session model directories. */
+const LABEL_CHILD_SLOT = 'conversation.input.model.label'
+/** The service the shipped picker exposes for per-session model directories. */
 const MODEL_DIRECTORIES = 'modelDirectories'
 /**
  * BELOW the shipped occupant's `priority: 0`.
  *
  * For a `single` slot the LOWEST priority renders — the registry says so in its
  * own error text ("register at a different priority to shadow it (lowest
- * renders)"), and `entriesOfSlot` returns the first survivor of a
- * priority-sorted list. A larger number would have lost to the shipped picker
- * instead of shadowing it.
+ * renders)"). A larger number would lose to the shipped picker instead of
+ * shadowing it.
  */
 const SHADOW_PRIORITY = -1
 
@@ -44,17 +39,12 @@ const SHADOW_PRIORITY = -1
  *
  * The packaged desktop app has no devtools, so a client half that fails to
  * register is indistinguishable from one that never loaded. Each stage is posted
- * to the Host half, which logs it next to its own `host 半边已 apply` line: the
- * pair tells the two cases apart immediately.
+ * to the Host half, which logs it beside its own line: the pair tells the two
+ * cases apart immediately.
  *
  * @param stage - a short description of the load stage reached.
  */
 const report = (stage) => {
-  // The renderer console reaches the desktop app log, which is captured in every
-  // diagnostics bundle. A POST to the Host half is kept as the richer channel,
-  // but it cannot be the only one: it is a second thing that can fail (trust
-  // fence, no route yet, offline), and a missing report then looks exactly like
-  // "apply was never called".
   try {
     console.error(`[model-picker] ${stage}`)
   } catch {
@@ -75,8 +65,7 @@ const report = (stage) => {
 /**
  * The failure worth capturing happens *outside* apply: the client composition
  * builds this plugin object, then never applies it, and whatever it threw on the
- * way is only visible in the page — which the packaged desktop app gives no
- * devtools for. Both global hooks forward to the host log instead.
+ * way is only visible in the page.
  *
  * @param value - the thrown value, in any shape.
  * @returns a short description safe to log.
@@ -113,184 +102,82 @@ window.__ModuleLoader__.load({
     return {
       name: PLUGIN,
       /**
-       * No fiber-level `inject`.
+       * Wait for the services the seat needs.
        *
-       * A required service that is not visible from this context keeps the whole
-       * entry in `loading`: Cordis never calls `apply`, and the client Loader
-       * turns that into `web boot: 1 entry did not activate`, i.e. a dead
-       * renderer. Waiting *inside* apply means an unmet dependency costs only the
-       * registration instead of the entire boot.
+       * The same set the shipped registration waits for, minus `commandUi` (this
+       * plugin contributes no `/model` command). Declaring them as fiber
+       * dependencies is safe: every one is registered by the time the composer
+       * renders, and a missing one is a composition error worth failing loudly
+       * rather than half-working.
        */
+      inject: ['locale', 'sessions', 'slots', 'remote', 'remote.session'],
       apply(ctx) {
         report(`apply 已调用（slots=${ctx.get('slots') === undefined ? '尚未就绪' : '就绪'}）`)
 
         /**
-         * The catalogue is built HERE, in `apply`, but it reads the `remote`
-         * service LAZILY.
+         * Register the seat through the shipped directory service.
          *
-         * Two facts pull in opposite directions and this is the seam between
-         * them:
-         *
-         *  - Event subscriptions must be installed from the plugin's own `apply`
-         *    fiber. The gateway registers a forwarded-event listener in the
-         *    CALLING fiber's private event domain, and a subscription made from a
-         *    `ctx.inject` callback lands in a different domain: `$on` returns a
-         *    disposer, so it looks successful, but the listener never fires.
-         *  - `remote` is frequently NOT visible yet when `apply` runs. Capturing
-         *    `ctx.get('remote')` here froze `undefined`, and every catalogue load
-         *    then answered "modelCatalog is unavailable".
-         *
-         * So the catalogue holds a resolver, not the face, and the subscription
-         * is attached as soon as the service appears.
+         * `ctx.inject` runs this callback once the named services are visible, so
+         * the registration lands at the same point the shipped one would. It is
+         * also re-run if a service goes away and returns, which is what keeps the
+         * seat from binding to `undefined` across a reconnect.
          */
-        const remoteFace = () => {
-          try { return ctx.get('remote') } catch { return undefined }
-        }
-        const catalog = createCatalog(remoteFace, (message) => { report(message) })
-        /**
-         * Attach the invalidation listeners, retrying once the remote exists.
-         *
-         * `ctx.inject` runs the callback as soon as the named services are
-         * visible, which is the point at which `$on` can be reached — and it runs
-         * in this same `apply` fiber, so the subscription still lands in the
-         * dispatching domain.
-         */
-        let detachCatalog = () => {}
-        const attachCatalog = () => {
-          const remote = remoteFace()
-          if (remote === undefined) return false
-          detachCatalog = catalog.attach(remote, (event) => {
-            report(`收到失效事件 ${event}`)
-          })
-          report(`失效订阅：已挂到 remote.$on`)
-          return true
-        }
-        if (!attachCatalog()) {
-          report('remote 尚未就绪，等它出现后再挂失效订阅')
-          if (typeof ctx.inject === 'function') {
-            ctx.inject(['remote'], () => { attachCatalog() })
-          }
-        }
-        const detachReset = typeof ctx.on === 'function'
-          ? ctx.on('connection/reset', () => { catalog.resetGeneration() })
-          : undefined
-        const sessions = (() => {
-          try { return ctx.get('sessions') } catch { return undefined }
-        })()
-        const shipped = (() => {
-          try { return ctx.get(MODEL_DIRECTORIES) } catch { return undefined }
-        })()
-        const directories = shipped !== undefined && typeof shipped.directoryFor === 'function'
-          ? shipped
-          : createDirectoryService(catalog, sessions, remoteFace)
-        const ownsDirectories = directories !== shipped
-        report(`目录来源：${ownsDirectories ? '本插件自带实现' : '复用官方 modelDirectories'}`)
-        const detachDirectories = ownsDirectories && typeof ctx.provide === 'function'
-          ? ctx.provide(MODEL_DIRECTORIES, directories)
-          : undefined
-        if (typeof ctx.effect === 'function') {
-          ctx.effect(() => {
-            detachCatalog()
-            detachReset?.()
-            detachDirectories?.()
-          }, 'dsh-model-picker: catalogue and directories')
-        }
+        ctx.inject(['slots', MODEL_DIRECTORIES], (scope) => {
+          const slots = scope.get('slots')
+          const models = scope.get(MODEL_DIRECTORIES)
+          const sessions = scope.get('sessions')
+          const locale = scope.get('locale')
+          const localeId = typeof locale?.getLocale === 'function'
+            ? String(locale.getLocale()?.locale ?? 'zh-CN')
+            : 'zh-CN'
 
-        const install = (scope) => {
-          try {
-            const at = scope ?? ctx
-            const slots = at.slots ?? ctx.get('slots')
-            if (slots === undefined) {
-              report('slots 服务仍不可用，槽位未注册')
-              return
-            }
-            const locale = ctx.get('locale')
-            const localeId = typeof locale?.getLocale === 'function'
-              ? String(locale.getLocale()?.locale ?? 'zh-CN')
-              : 'zh-CN'
+          if (slots === undefined || models === undefined) {
+            report(`槽位未注册：slots=${slots === undefined ? '缺失' : '就绪'} modelDirectories=${models === undefined ? '缺失' : '就绪'}`)
+            return
+          }
+
+          slots.inject(SLOT, () => {
+            report('槽位回调已运行，准备注册 occupant')
             /**
-             * Neither `ctx.remote` nor `ctx.remote.session` can be read through
-             * the property proxy without an `inject` entry — Cordis throws
-             * `cannot get property "remote.session" without inject`, which crashed
-             * this component on its first render and got the entry abdicated.
+             * The same registration shape the shipped picker uses, including the
+             * `conversation.input.model.label` child declaration.
              *
-             * `ctx.get(...)` returns `undefined` instead of throwing, so the
-             * picker degrades to its "could not load the model list" state rather
-             * than taking the whole slot down.
+             * That declaration is what keeps provider decorations working:
+             * `renderSlot` is only authorised for a child the entry declared
+             * itself, so a replacement that skipped it would silently delete
+             * every badge and availability hint mounted there.
              */
-            const remoteSession = at['remote.session'] ?? ctx.get('remote.session') ?? remoteFace()?.session
-
-            slots.inject(SLOT, () => {
-              report('槽位回调已运行，准备注册 occupant')
-              /**
-               * NO `children` declaration, on purpose.
-               *
-               * A child slot may be declared exactly once, and the shipped picker
-               * already declares `conversation.input.model.label` for its own
-               * occupant. Declaring it here threw during registration, which is
-               * what removed the shipped occupant and left the slot empty.
-               *
-               * The consequence is that provider decorations mounted on the label
-               * child do not render while this picker is in charge. Rendering them
-               * would require owning the declaration, i.e. the shipped
-               * `ui-model-selection` occupant being absent entirely.
-               */
-              const dispose = slots.register({
-                name: SLOT,
-                priority: SHADOW_PRIORITY,
-                inject: (sessionId) => {
-                  const sessionSessions = ctx.get('sessions')
-                  /**
-                   * The per-session directory is the data face of this picker.
-                   *
-                   * `directoryFor` is the shipped service's own entry point; when
-                   * this plugin had to provide the service, the fallback has the
-                   * same signature, so the component never knows the difference.
-                   */
-                  const directory = directories.directoryFor(sessionId)
-                  // The shipped directory projects inside its constructor and on
-                  // its subscriptions; it exposes no `sync`. Only this plugin's
-                  // fallback has one, so probe instead of assuming — calling it
-                  // unconditionally threw on the shipped service and took the
-                  // whole slot registration down with it.
-                  if (typeof directory?.sync === 'function') directory.sync()
-                  /**
-                   * The directory's own snapshot, reported once per registration.
-                   *
-                   * This is the line that tells the two "not refreshed" failure
-                   * modes apart: if the group count here stops matching what the
-                   * Host now offers, the directory is stale; if it tracks the Host
-                   * while the panel still shows old rows, the panel is not
-                   * rendering the update.
-                   */
-                  const snapshot = directory?.store?.getSnapshot?.()
-                  report(`目录快照：${Array.isArray(snapshot?.groups) ? snapshot.groups.length : 0} 组 / 状态 ${snapshot?.status ?? '?'}`)
-                  return {
-                    sessionId,
-                    localeId,
-                    remote: remoteFace(),
-                    remoteSession,
-                    sessions: sessionSessions,
-                    catalog,
-                    directory,
-                    available: isAvailable(sessionSessions, sessionId)
-                  }
+            const dispose = slots.register({
+              name: SLOT,
+              priority: SHADOW_PRIORITY,
+              children: {
+                [LABEL_CHILD_SLOT]: { kind: 'single', scope: 'session', inline: true }
+              },
+              inject: (sessionId) => {
+                const directory = models.directoryFor(sessionId)
+                const available = typeof sessions?.subagentAddress === 'function'
+                  ? sessions.subagentAddress(sessionId) === undefined
+                  : true
+                return {
+                  sessionId,
+                  localeId,
+                  available,
+                  // The shipped registration hands over the STORE, not the
+                  // controller; the component subscribes to it directly.
+                  directory: directory.store,
+                  load: () => {
+                    if (available) directory.load().catch(() => {})
+                  },
+                  select: (selection) => available
+                    ? directory.select(selection)
+                    : Promise.resolve(undefined)
                 }
-              }, ModelPicker)
-              report('occupant 已注册（priority ' + SHADOW_PRIORITY + '）')
-              return dispose
-            })
-          } catch (error) {
-            report(`槽位注册抛错：${error instanceof Error ? `${error.message}` : String(error)}`)
-          }
-        }
-
-        // Soft wait: `apply` has already run, so a service that never shows up
-        // can no longer fail the boot. The remotes are included because the
-        // picker cannot do anything without them, and waiting here keeps the
-        // failure to a missing control instead of a crashed one.
-        if (typeof ctx.inject === 'function') ctx.inject(['slots', 'remote', 'remote.session'], install)
-        else install(ctx)
+              }
+            }, ModelPicker)
+            report(`occupant 已注册（priority ${SHADOW_PRIORITY}）`)
+            return dispose
+          })
+        })
       }
     }
   }

@@ -67,484 +67,6 @@ function readSnapshot(useState, useEffect, source) {
   return value
 }
 
-//# module: src/core/catalog.js
-
-/**
- * The Host notifications that can change the catalogue.
- *
- * `llm/adapters-updated` covers a provider adding or removing a model; the other
- * three cover the inputs a provider's availability is derived from (settings,
- * stored credentials, credential references). The shipped directory subscribes to
- * exactly these four, so a model switched off in a provider's own panel
- * disappears here on the same tick it disappears there. Listening to the first
- * one alone left this picker offering models the Host would refuse until the page
- * was reloaded.
- */
-const INVALIDATION_EVENTS = Object.freeze([
-  'llm/adapters-updated',
-  'settings/document-updated',
-  'credentials/record-updated',
-  'credentials/reference-updated'
-])
-
-/**
- * One Host-generation catalogue shared by every session.
- *
- * Mirrors the shipped `ModelCatalogDirectory`: a single value, one in-flight
- * request shared by every reader, a generation counter that discards responses
- * from a superseded generation, and a `reasoning` map that remembers each
- * model's effort metadata *after* the model leaves the catalogue — so a level
- * still shows its name while its model is gone.
- *
- * @param resolveRemote - returns the client remote face carrying `session.modelCatalog`.
- *   A THUNK, not the face itself: this catalogue is built in `apply`, where the
- *   `remote` service is often not visible yet (it arrives later in the client boot
- *   sequence). Capturing the value here froze `undefined` and every load then
- *   reported "modelCatalog is unavailable".
- * @param onDiagnostic - optional sink for load-stage notes.
- * @returns the catalogue controller.
- */
-function createCatalog(resolveRemote, onDiagnostic) {
-  const store = createStore({ value: null, status: 'idle', error: null })
-  const reasoning = new Map()
-  // Bumped by every invalidation. A response that resolves under an older
-  // generation is dropped instead of publishing a catalogue the Host has
-  // already superseded.
-  let generation = 0
-  let inflight
-
-  const note = (message) => {
-    try { onDiagnostic?.(message) } catch { /* diagnostics never break the load */ }
-  }
-
-  /** The remote face as it is right now, or undefined while the service is absent. */
-  const currentRemote = () => {
-    try { return typeof resolveRemote === 'function' ? resolveRemote() : resolveRemote } catch { return undefined }
-  }
-
-  const reasoningFor = (selection) => selection === null || selection === undefined
-    ? undefined
-    : reasoning.get(JSON.stringify([selection.provider, selection.model]))
-
-  const load = () => {
-    const state = store.getSnapshot()
-    if (state.status === 'ready' && state.value !== null) return Promise.resolve(state.value)
-    if (inflight !== undefined) return inflight
-    const remote = currentRemote()
-    const run = remote?.session?.modelCatalog
-    if (typeof run !== 'function') {
-      note('modelCatalog 不可用：remote 尚未就绪')
-      store.set({ value: state.value, status: 'error', error: 'modelCatalog is unavailable' })
-      return Promise.resolve(undefined)
-    }
-    const at = generation
-    // Keep the previous value visible while reloading: an invalidation is not an
-    // error, and blanking the list would flash on every provider edit.
-    store.update((draft) => { draft.status = 'loading'; draft.error = null })
-    const operation = Promise.resolve(run.call(remote.session)).then((result) => {
-      if (result?.ok !== true) {
-        note(`modelCatalog 失败：${result?.error?.code ?? '?'} ${result?.error?.message ?? ''}`)
-        if (at === generation) {
-          store.set({
-            value: store.getSnapshot().value,
-            status: 'error',
-            error: result?.error?.message ?? 'failed'
-          })
-        }
-        return undefined
-      }
-      const groups = Array.isArray(result.value?.groups) ? result.value.groups : []
-      note(`modelCatalog 成功：${groups.length} 组，gen ${at}/${generation}`)
-      if (at === generation) {
-        for (const group of groups) {
-          for (const model of group.models) {
-            reasoning.set(JSON.stringify([group.id, model.id]), model.reasoning)
-          }
-        }
-        store.set({ value: result.value, status: 'ready', error: null })
-      } else {
-        // The result was dropped: another load superseded it. Say so, because a
-        // silently discarded success is what leaves the store on `loading`.
-        note(`modelCatalog 结果被丢弃（gen ${at} != ${generation}）`)
-      }
-      return result.value
-    }).catch((error) => {
-      note(`modelCatalog 抛错：${error instanceof Error ? error.message : String(error)}`)
-      if (at === generation) {
-        store.set({
-          value: store.getSnapshot().value,
-          status: 'error',
-          error: error instanceof Error ? error.message : String(error)
-        })
-      }
-      return undefined
-    }).finally(() => {
-      if (at === generation && inflight === operation) inflight = undefined
-    })
-    inflight = operation
-    return operation
-  }
-  const invalidate = (clear) => {
-    generation += 1
-    inflight = undefined
-    store.set({
-      value: clear === true ? null : store.getSnapshot().value,
-      status: 'idle',
-      error: null
-    })
-  }
-
-  /** Re-read on the next explicit load, keeping the stale value on screen. */
-  const refresh = () => {
-    note(`refresh 被调用（gen ${generation} → ${generation + 1}）`)
-    invalidate(false)
-    load()
-  }
-
-  /** Drop everything: the value belonged to a Host generation that is gone. */
-  const resetGeneration = () => { reasoning.clear(); invalidate(true); load() }
-
-  /**
-   * Subscribe the invalidation events.
-   *
-   * Call this from the plugin's `apply` body, not from a scope or slot callback.
-   * The gateway registers a forwarded-event listener in the CALLING fiber's
-   * private event domain, and only the plugin's own `apply` fiber is in the
-   * domain the dispatcher publishes to — a subscription installed from a
-   * `ctx.inject` callback is accepted (it returns a disposer) but never fires.
-   *
-   * @param target - the client remote carrying `$on`.
-   * @param onEvent - optional observer called with each delivered event name.
-   * @returns a disposer removing every subscription.
-   */
-  const attach = (target, onEvent) => {
-    const offs = []
-    const failed = []
-    for (const event of INVALIDATION_EVENTS) {
-      try {
-        if (typeof target?.$on !== 'function') {
-          failed.push(`${event}: 目标没有 $on`)
-          continue
-        }
-        const off = target.$on(event, () => {
-          onEvent?.(event)
-          refresh()
-        })
-        if (typeof off === 'function') offs.push(off)
-        else failed.push(`${event}: 返回的不是 disposer`)
-      } catch (error) {
-        failed.push(`${event}: ${error instanceof Error ? error.message : String(error)}`)
-      }
-    }
-    note(`订阅结果：成功 ${offs.length}/${INVALIDATION_EVENTS.length}${failed.length > 0 ? `；问题：${failed.join(' | ')}` : ''}`)
-    return () => { for (const off of offs) off() }
-  }
-
-  /** Whether this target can carry event subscriptions at all. */
-  const canAttach = (target) => typeof target?.$on === 'function'
-
-  return { store, reasoningFor, load, refresh, resetGeneration, attach, canAttach }
-}
-
-//# module: src/core/selection.js
-/**
- * Reading a model selection out of whatever shape the Host handed over.
- *
- * The projection carries the selection; older and newer Host generations have
- * spelled the fields differently (`provider` / `providerId` / `provider_id`),
- * so every known shape is accepted and an unknown one simply yields `null`
- * rather than guessing.
- *
- * @param projection - a projection frame, a selection, or nothing.
- * @returns `{ provider, model, reasoningEffort }`, or null when unreadable.
- */
-function readSelection(projection) {
-  const value = projection?.next ?? projection?.current ?? projection
-  if (value === null || typeof value !== 'object') return null
-  const provider = value.provider ?? value.providerId ?? value.provider_id
-  const model = value.model ?? value.modelId ?? value.model_id
-  if (typeof provider !== 'string' || typeof model !== 'string') return null
-  return { provider, model, reasoningEffort: value.reasoningEffort }
-}
-
-/**
- * Whether this session may change its model at all.
- *
- * An addressed subagent session cannot: the Host rejects the RPC. The shipped
- * picker renders nothing in that case rather than offering a control whose every
- * click fails. `subagentAddress` is the same probe it uses; a client generation
- * without it counts as available, so an older build keeps showing the control
- * instead of silently losing it.
- *
- * @param sessions - the sessions service face.
- * @param sessionId - the session being rendered.
- * @returns whether the model control should be offered.
- */
-function isAvailable(sessions, sessionId) {
-  try {
-    if (typeof sessions?.subagentAddress !== 'function') return true
-    return sessions.subagentAddress(sessionId) === undefined
-  } catch {
-    return true
-  }
-}
-
-//# module: src/core/directory.js
-
-
-/**
- * One session's directory, mirroring the shipped `ModelDirectory`.
- *
- * The catalogue is Host-wide, but the *selection* is per session: which model is
- * in effect, whether that model is still routable, what is in flight, and which
- * provider groups failed to load. The shipped picker renders all four, and a
- * replacement that collapsed them into "the catalogue plus the projection" loses
- * the in-flight state (so a slow switch shows nothing) and the failure list (so a
- * broken provider group is silently missing).
- *
- * The store contract is the same one the renderer's hooks read:
- * `{ current, routable, groups, failures, status, pending, error }`.
- *
- * @param catalog - the shared catalogue controller.
- * @param projectedFace - the session's `modelSelection` projection face.
- * @param remote - the client remote face carrying `session.selectModel`.
- * @param sessionId - the owning session.
- * @returns the directory controller.
- */
-function createDirectory(catalog, projectedFace, remote, sessionId) {
-  const store = createStore({
-    current: null,
-    routable: null,
-    groups: [],
-    failures: [],
-    status: 'idle',
-    pending: null,
-    error: null
-  })
-  // Latest selection wins: an older response must never overwrite a newer one.
-  let generation = 0
-  let disposed = false
-
-  /**
-   * Recompute the effective selection from the two inputs that define it.
-   *
-   * `intended` is the session's explicit choice, else the catalogue default —
-   * exactly the shipped precedence. `routable` says whether the Host would still
-   * accept it, which is what lets the trigger distinguish "this model" from "a
-   * model that no longer exists".
-   */
-  const sync = () => {
-    if (disposed) return
-    const catalogState = catalog.store.getSnapshot()
-    const projected = readSelection(projectedFace?.getSnapshot?.())
-    const intended = projected ?? readSelection(catalogState.value?.default)
-    const reasoning = catalog.reasoningFor(intended)
-    const effort = intended?.reasoningEffort ?? reasoning?.defaultEffort
-    const retainedEffort = effort === undefined
-      ? undefined
-      : reasoning?.efforts?.find((level) => level.id === effort)?.name ?? effort
-    const ready = catalogState.status === 'ready' && catalogState.value !== null
-    if (!ready || intended === null) {
-      store.set({
-        current: catalogState.value === null ? null : store.getSnapshot().current,
-        ...retainedEffort === undefined ? {} : { retainedEffort },
-        routable: null,
-        groups: catalogState.value?.groups ?? [],
-        failures: catalogState.value?.failures ?? [],
-        status: catalogState.status === 'error' ? 'error' : 'loading',
-        pending: store.getSnapshot().pending,
-        error: catalogState.error
-      })
-      return
-    }
-    const routable = (catalogState.value.groups ?? []).some((group) =>
-      group.id === intended.provider && (group.models ?? []).some((model) => model.id === intended.model))
-    store.set({
-      current: intended,
-      ...retainedEffort === undefined ? {} : { retainedEffort },
-      routable,
-      groups: catalogState.value.groups,
-      failures: catalogState.value.failures ?? [],
-      status: store.getSnapshot().status === 'selecting' ? 'selecting' : 'ready',
-      pending: store.getSnapshot().pending,
-      error: null
-    })
-  }
-
-  const unsubscribeCatalog = catalog.store.subscribe(() => { sync() })
-  const unsubscribeProjection = projectedFace?.subscribe?.(() => { sync() })
-  sync()
-
-  /**
-   * Select the complete provider/model/effort triple.
-   *
-   * The pending selection is published before the RPC and cleared after it, so
-   * the trigger can show which row is settling. A response that arrives after a
-   * newer selection (or after disposal) is dropped rather than written, which is
-   * the bug a bare `busy` flag cannot avoid: two fast clicks would otherwise let
-   * the first reply overwrite the second choice.
-   *
-   * @param selection - provider, model, and optional reasoningEffort.
-   * @returns the Host result, or a synthesized failure.
-   */
-  const select = async (selection) => {
-    // The adapter's default effort is part of the selection the shipped picker
-    // submits, so a model switch also settles the level instead of leaving the
-    // Host to guess on the next call.
-    const nextEffort = selection.reasoningEffort ?? catalog.reasoningFor(selection)?.defaultEffort
-    const next = { ...selection, ...nextEffort === undefined ? {} : { reasoningEffort: nextEffort } }
-    const generationAt = ++generation
-    store.update((draft) => {
-      draft.status = 'selecting'
-      draft.pending = next
-      draft.error = null
-    })
-    const run = remote?.session?.selectModel
-    if (typeof run !== 'function') {
-      store.update((draft) => {
-        draft.status = 'error'
-        draft.pending = null
-        draft.error = 'selectModel is unavailable'
-      })
-      return { ok: false, error: { code: 'unavailable', message: 'selectModel is unavailable' } }
-    }
-    let result
-    try {
-      result = await run.call(remote.session, {
-        sessionId,
-        provider: next.provider,
-        model: next.model,
-        ...next.reasoningEffort === undefined ? {} : { reasoningEffort: next.reasoningEffort }
-      })
-    } catch (error) {
-      result = {
-        ok: false,
-        error: { code: 'threw', message: error instanceof Error ? error.message : String(error) }
-      }
-    }
-    if (disposed || generationAt !== generation) {
-      return result?.ok === true ? { ok: true, value: undefined } : result
-    }
-    if (result?.ok !== true) {
-      store.update((draft) => {
-        draft.status = 'error'
-        draft.pending = null
-        draft.error = `${result?.error?.code ?? 'error'}: ${result?.error?.message ?? 'failed'}`
-      })
-      return result
-    }
-    store.update((draft) => {
-      draft.status = 'ready'
-      draft.pending = null
-      draft.error = null
-    })
-    /**
-     * Do NOT re-project here.
-     *
-     * `sync()` recomputes `current` from the session's projected selection. The
-     * Host answers `selectModel` before it publishes that projection, so calling
-     * `sync()` at this point reads the OLD selection and writes it straight back
-     * over the one just chosen — the picker then looks like the click did
-     * nothing. The projection's own subscription calls `sync()` when the Host
-     * actually publishes, which is the only moment the new value is real.
-     *
-     * Until that push arrives, `current` is the selection the Host just
-     * acknowledged. `selected` in the answer is authoritative when present;
-     * otherwise the triple we sent is what the Host accepted.
-     */
-    const settled = readSelection(result?.value?.selected) ?? next
-    store.update((draft) => {
-      draft.current = settled
-      draft.routable = true
-    })
-    return { ok: true, value: undefined }
-  }
-
-  /** Invalidate an in-flight response from a previous Host generation. */
-  const resetConnected = () => {
-    if (disposed) return
-    generation += 1
-    store.update((draft) => {
-      if (draft.status === 'selecting') draft.status = 'idle'
-      draft.pending = null
-      draft.error = null
-    })
-    sync()
-  }
-
-  /** Ensure the shared catalogue is loaded, then re-project. */
-  const load = async () => {
-    await catalog.load()
-    sync()
-    return store.getSnapshot()
-  }
-
-  /** Scope teardown: late settlements lose write access to the store. */
-  const dispose = () => {
-    disposed = true
-    unsubscribeCatalog?.()
-    unsubscribeProjection?.()
-  }
-
-  return { store, select, load, resetConnected, dispose, sync }
-}
-
-//# module: src/core/directories.js
-
-/**
- * The `modelDirectories` service: one directory per session, shared by
- * everything that renders a model seat.
- *
- * The shipped plugin registers exactly this service, and reusing its instance is
- * what keeps a replacement picker and the `/model` popup agreeing on one
- * selection state. When it is absent (the shipped bundle disabled, an older
- * build), this plugin provides its own under the same name so the rest of the
- * code has one contract either way.
- *
- * @param catalog - the shared catalogue controller.
- * @param sessions - the sessions service face.
- * @param resolveRemote - returns the client remote face. A thunk for the same
- *   reason the catalogue takes one: the service is often not visible yet when
- *   this object is built, and capturing it froze `undefined`.
- * @returns the service object with `directoryFor`.
- */
-function createDirectoryService(catalog, sessions, resolveRemote) {
-  /** The remote face as it is right now, or undefined while the service is absent. */
-  const currentRemote = () => {
-    try { return typeof resolveRemote === 'function' ? resolveRemote() : resolveRemote } catch { return undefined }
-  }
-
-  /**
-   * Keyed by session id, not by binding object.
-   *
-   * The shipped resolver keys a WeakMap by `sessions.binding(id)` because it
-   * disposes each directory with the session scope. Keying by the binding here
-   * would be wrong for a different reason: a binding accessor is free to return a
-   * fresh wrapper per call, and each call would then allocate a new directory —
-   * every remount of the seat losing the in-flight selection and re-projecting
-   * from scratch. The id is the stable identity; `directoryFor` is called per
-   * render, so it must be cheap and idempotent.
-   */
-  const directories = new Map()
-
-  const directoryFor = (sessionId) => {
-    const key = String(sessionId)
-    const existing = directories.get(key)
-    if (existing !== undefined) return existing
-    const binding = (() => {
-      try { return sessions?.binding?.(sessionId) } catch { return undefined }
-    })()
-    const projectedFace = (() => {
-      try { return binding?.session?.projections?.faceOf?.('modelSelection') } catch { return undefined }
-    })()
-    const directory = createDirectory(catalog, projectedFace, currentRemote(), sessionId)
-    directories.set(key, directory)
-    return directory
-  }
-
-  return { directoryFor, directories }
-}
-
 //# module: src/ui/Chevron.js
 /**
  * The chevron that turns when its panel is open.
@@ -569,6 +91,12 @@ function Chevron({ h, open }) {
  * Host theme tokens only, plus the two composer variables the row sets when its
  * controls no longer fit on one line. Every class is prefixed `dmp-` so a copied
  * host pattern can never collide with the host's own rules.
+ *
+ * Sizing follows the shipped menu rather than inventing its own scale: the panel
+ * is `max-content` wide (so a short list stays narrow instead of stretching to a
+ * fixed width), rows are 34px tall with 5px/7px padding, and the panel pads 4px.
+ * Those numbers are what makes the replacement feel like part of the composer
+ * instead of a dialog dropped on top of it.
  */
 const CSS = `
 .dmp-root { position: relative; display: flex; align-items: center; gap: 2px; min-width: 0; }
@@ -576,45 +104,57 @@ const CSS = `
    their own button and never overlap each other. */
 .dmp-control { position: relative; display: flex; align-items: center; min-width: 0; }
 .dmp-trigger { display: flex; align-items: center; gap: 4px; min-width: 0; max-width: min(360px, 45cqw);
-  height: 28px; padding: 0 4px 0 8px; border: 0; border-radius: 6px; cursor: pointer;
+  height: 28px; padding: 0 4px 0 8px; border: 0; border-radius: var(--dsw-radius-sm, 6px); cursor: pointer;
   background: transparent; color: var(--dsw-alias-label-secondary);
   font: inherit; font-size: 13px; line-height: 20px; }
 .dmp-trigger-effort { max-width: min(150px, 28cqw); padding: 0 4px 0 6px; font-size: 12px;
-  color: var(--dsw-alias-label-secondary); }
+  color: var(--dsw-alias-label-caption, var(--dsw-alias-label-secondary)); }
 .dmp-trigger:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.12)); }
-.dmp-trigger:disabled { color: var(--dsw-alias-state-idle-primary); cursor: default; }
+.dmp-trigger:disabled { color: var(--dsw-alias-label-dimmed, var(--dsw-alias-state-idle-primary)); cursor: default; }
 .dmp-trigger-icon { display: var(--dsh-composer-model-icon-display, none); flex: none; }
 .dmp-trigger-text { display: var(--dsh-composer-model-text-display, block);
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dmp-chevron { flex: none; color: var(--dsw-alias-label-secondary); transition: transform .12s; }
+.dmp-chevron { flex: none; color: var(--dsw-alias-label-caption, var(--dsw-alias-label-secondary));
+  transition: transform .12s; }
 .dmp-chevron-open { transform: rotate(180deg); }
+/* Content-sized, like the shipped menu: a two-model list must not be as wide as a
+   twenty-model one. The caps only exist so a long model name cannot run off the
+   viewport. */
 .dmp-panel { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 40;
-  width: min(420px, 84vw); max-height: 320px; display: flex; flex-direction: column;
-  border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px;
+  width: max-content; min-width: min(240px, 100vw - 32px); max-width: min(360px, 92vw);
+  max-height: min(320px, 60vh); display: flex; flex-direction: column; padding: 4px;
+  border: 1px solid var(--dsw-alias-border-l1); border-radius: var(--dsw-radius-lg, 10px);
   background: var(--dsw-alias-bg-overlay, var(--dsw-alias-bg-layer-1));
-  box-shadow: 0 8px 28px rgba(0,0,0,.18); overflow: hidden; }
-.dmp-search { flex: none; padding: 8px 10px; border-bottom: 1px solid var(--dsw-alias-border-l1); }
-.dmp-search input { width: 100%; box-sizing: border-box; padding: 6px 8px; font: inherit; font-size: 12.5px;
-  color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-2, transparent);
-  border: 1px solid var(--dsw-alias-border-l1); border-radius: 6px; outline: none; }
-.dmp-search input:focus-visible { border-color: var(--dsw-alias-brand-primary); }
-.dmp-list { flex: 1; overflow-y: auto; padding: 4px 0 6px; }
-.dmp-group { padding: 6px 12px 2px; font-size: 11px; letter-spacing: .04em;
-  color: var(--dsw-alias-label-secondary); }
-.dmp-item { display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box;
-  padding: 6px 12px; border: 0; background: transparent; cursor: pointer; text-align: left;
+  box-shadow: var(--dsw-elevation-prominent, 0 8px 28px rgba(0,0,0,.18));
+  color: var(--dsw-alias-label-primary); overflow: hidden; }
+.dmp-search { flex: none; padding: 0 0 4px; }
+.dmp-search input { width: 100%; box-sizing: border-box; padding: 5px 7px; font: inherit; font-size: 12.5px;
+  color: var(--dsw-alias-label-primary); background: transparent;
+  border: 1px solid var(--dsw-alias-border-l1); border-radius: var(--dsw-radius-md, 8px); outline: none; }
+.dmp-search input:focus-visible { border-color: var(--dsw-alias-state-business-primary, var(--dsw-alias-brand-primary)); }
+.dmp-list { flex: 1; overflow-y: auto; }
+.dmp-group { padding: 6px 7px 2px; font-size: 11px; letter-spacing: .04em;
+  color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary)); }
+.dmp-item { display: flex; align-items: center; gap: 6px; width: auto; min-width: 100%; box-sizing: border-box;
+  min-height: 34px; padding: 5px 7px; border: 0; border-radius: var(--dsw-radius-md, 8px);
+  background: transparent; cursor: pointer; text-align: left;
   color: var(--dsw-alias-label-primary); font: inherit; font-size: 12.5px; }
 .dmp-item:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.12)); }
 .dmp-item-current { color: var(--dsw-alias-brand-primary); font-weight: 600; }
 .dmp-item-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dmp-item-note { margin-left: auto; padding-left: 8px; font-size: 11px;
-  color: var(--dsw-alias-label-secondary); }
-/* The level list holds short labels, so it stays narrow and tight. */
-.dmp-panel-narrow { width: min(220px, 60vw); max-height: 260px; }
-.dmp-note { padding: 10px 12px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+  color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary)); }
+/* The level list holds short labels, so it stays narrower than the model list.
+   It also anchors to its own right edge: the control sits near the right side of
+   the composer row, so a left-anchored panel would run off the viewport. */
+.dmp-panel-narrow { left: auto; right: 0; min-width: min(160px, 60vw); max-width: min(220px, 80vw);
+  max-height: min(260px, 50vh); }
+.dmp-note { padding: 8px 7px; font-size: 12px; line-height: 18px;
+  color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary)); }
 .dmp-note-error { color: var(--dsw-alias-state-error-primary); }
 .dmp-retry { margin-top: 6px; padding: 4px 10px; border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 6px; background: transparent; color: inherit; font: inherit; font-size: 12px; cursor: pointer; }
+  border-radius: var(--dsw-radius-sm, 6px); background: transparent; color: inherit;
+  font: inherit; font-size: 12px; cursor: pointer; }
 `
 
 //# module: src/ui/dict.js
@@ -693,7 +233,15 @@ function createModelPicker(React) {
   const { useCallback, useEffect, useMemo, useRef, useState } = React
 
   return function ModelPicker(props) {
-    const { sessionId, locked, renderSlot, directory, catalog: catalogFace, available } = props
+    /**
+     * The props bundle the shipped registration hands its own component.
+     *
+     * `directory` is the session directory's STORE (already subscribed-ready),
+     * `load` asks it to refresh, `select` submits a triple, and `available` says
+     * whether this session may change models at all. Nothing here reaches behind
+     * that bundle: the data layer is the shipped one, this file is the view.
+     */
+    const { sessionId, locked, renderSlot, directory, available, load, select: submit } = props
 
     const localeId = typeof props.localeId === 'string' ? props.localeId : 'zh-CN'
     const t = dictionaryFor(localeId)
@@ -704,11 +252,7 @@ function createModelPicker(React) {
     const [query, setQuery] = useState('')
     const rootRef = useRef(null)
 
-    const state = readSnapshot(useState, useEffect, directory?.store) ?? {}
-    // `catalogFace` is the catalogue controller, not a store: its snapshot source
-    // is `store`. Passing the controller itself made the hook call a missing
-    // `getSnapshot` on first render.
-    const catalogState = readSnapshot(useState, useEffect, catalogFace?.store)
+    const state = readSnapshot(useState, useEffect, directory) ?? {}
     const groups = Array.isArray(state.groups) ? state.groups : []
     const failures = Array.isArray(state.failures) ? state.failures : []
     const selection = state.current ?? null
@@ -716,24 +260,11 @@ function createModelPicker(React) {
     const busy = pending !== null || state.status === 'selecting'
 
     useEffect(() => {
-      /**
-       * Load the directory, not just a catalogue.
-       *
-       * In reuse mode `directory` is the shipped one and `catalogFace` is this
-       * plugin's own catalogue — loading the latter alone left the shipped
-       * directory's catalogue untouched, so its `groups` never advanced past
-       * whatever it held when the seat first mounted. `directory.load()` asks the
-       * object that actually feeds `state.groups`; its own `load` is idempotent
-       * and internally refreshes the catalogue it reads.
-       */
-      if (typeof directory?.load === 'function') {
-        const outcome = directory.load()
-        if (outcome !== undefined && typeof outcome.then === 'function') outcome.catch(() => {})
-      } else if (catalogFace !== undefined && catalogFace !== null) {
-        catalogFace.load()
-      }
+      // Ask the directory to load. It is idempotent: the shipped controller
+      // shares one in-flight request and re-projects when it settles.
+      if (typeof load === 'function') load()
       return undefined
-    }, [directory, catalogFace])
+    }, [load])
 
     useEffect(() => {
       if (panel === null) return undefined
@@ -755,16 +286,16 @@ function createModelPicker(React) {
      * adapter defaults to a level records that level rather than an unset field.
      */
     const select = useCallback(async (group, model, reasoningEffort) => {
-      if (directory === undefined || directory === null) return
+      if (typeof submit !== 'function') return
       const effort = reasoningEffort ?? model?.reasoning?.defaultEffort
-      const result = await directory.select({
+      const result = await submit({
         provider: group.id,
         model: model.id,
         ...effort === undefined ? {} : { reasoningEffort: effort }
       })
       if (result?.ok !== true) return
       setPanel(null)
-    }, [directory])
+    }, [submit])
 
     const needle = query.trim().toLowerCase()
     const filtered = useMemo(() => {
@@ -810,10 +341,10 @@ function createModelPicker(React) {
      * The label, in the shipped picker's addressable wrapper.
      *
      * The `data-provider-id` / `data-model-id` span is kept because CSS that
-     * targets one model by id still works. `renderSlot` is probed rather than
-     * assumed: the renderer hands an entry that binding only for children the
-     * entry declared itself, and this one deliberately declares none (the shipped
-     * occupant owns the declaration), so the plain name is what actually renders.
+     * targets one model by id still works. `renderSlot` renders the
+     * `conversation.input.model.label` child this entry declares, which is where
+     * provider plugins mount their badges; the fallback keeps the plain name
+     * visible when nothing is mounted there.
      */
     const renderLabel = (group, model, placement, selected) => h('span', {
       'data-provider-id': group?.id,
@@ -842,24 +373,21 @@ function createModelPicker(React) {
 
     const notes = []
     /**
-     * Three independent problems, reported separately.
+     * Two independent problems, reported separately.
      *
-     * A catalogue failure belongs to the shared cache and affects every session;
-     * a selection failure belongs to this session's directory; a provider group
-     * that failed to load belongs to the catalogue's failure list and explains a
-     * group that is simply absent. Collapsing them into one message meant a
-     * failed switch erased the load error and vice versa.
+     * A load failure belongs to the shared directory (every session sees it); a
+     * selection failure belongs to this session. Merging them meant a failed
+     * switch erased the load error and vice versa.
      */
-    const catalogError = typeof catalogState?.error === 'string' ? catalogState.error : ''
     const selectionError = typeof state.error === 'string' ? state.error : ''
-    if (state.status === 'loading' && groups.length === 0 && catalogError.length === 0) {
+    if (state.status === 'loading' && groups.length === 0) {
       notes.push(h('div', { key: 'loading', className: 'dmp-note' }, t.loading))
     }
-    if (catalogError.length > 0 || selectionError.length > 0) {
+    if (selectionError.length > 0) {
       notes.push(h('div', { key: 'error', className: 'dmp-note dmp-note-error' },
-        catalogError.length > 0 ? catalogError : selectionError,
+        selectionError,
         h('div', null, h('button', {
-          type: 'button', className: 'dmp-retry', onClick: () => catalogFace?.refresh()
+          type: 'button', className: 'dmp-retry', onClick: () => { if (typeof load === 'function') load() }
         }, t.retry))))
     }
     // A provider group whose catalogue failed: say so, instead of leaving a
@@ -959,40 +487,35 @@ function createModelPicker(React) {
 /**
  * Client entry: the module-loader registration and the plugin object.
  *
- * This file is the only browser entry the Client module loader knows about for
- * this package. Everything it uses lives in sibling modules under `src/`, and
- * `scripts/build.mjs` concatenates them into the served `client.js`.
+ * This plugin replaces ONLY the composer's model-selection UI. Everything behind
+ * it — the per-session directory, the catalogue cache, the invalidation events,
+ * the selection RPC — is the shipped `ui-model-selection` implementation, reached
+ * through its `modelDirectories` service.
  *
- * Why the picker shadows this slot at all: `conversation.input.model` is a
- * `single` slot whose shipped occupant carries `replaceRisk: shadows-shipped-ui`.
- * Shadowing it is a visual choice, so it lives in a bundle that can be turned
- * off again without touching any provider registration.
+ * That split works because the shipped plugin keeps its slot registration and its
+ * component apart: the registration's `inject` hands the component a plain props
+ * bundle (`available`, a `directory` store, `load`, `select`), and the component
+ * may render however it likes. This entry registers the same slot with the same
+ * `inject` contract and substitutes its own component.
  *
- * On the `conversation.input.model.label` child slot: the shipped picker declares
- * it and provider plugins decorate it. This picker cannot join them — a child
- * slot may be declared exactly once and the shipped occupant keeps its
- * declaration even while shadowed, so a second declaration throws at
- * registration. The renderer then hands an entry a `renderSlot` binding only for
- * children that entry declared itself, so not declaring means not rendering. The
- * decorations therefore do not appear here and each model is shown by its plain
- * name. That is an accepted consequence of shadowing this slot, not an oversight.
+ * Why not copy the shipped bundle instead: a copy registers a second
+ * `ModelDirectoryResolver` under the same service name, the two fight over it,
+ * and the shipped plugin parks in `loading` — which fails the whole renderer
+ * boot. Reusing the service avoids that, and keeps tracking upstream fixes.
  */
-
-
-
 
 const PLUGIN = 'dsh-model-picker'
 const SLOT = 'conversation.input.model'
-/** The shipped service that owns per-session model directories. */
+const LABEL_CHILD_SLOT = 'conversation.input.model.label'
+/** The service the shipped picker exposes for per-session model directories. */
 const MODEL_DIRECTORIES = 'modelDirectories'
 /**
  * BELOW the shipped occupant's `priority: 0`.
  *
  * For a `single` slot the LOWEST priority renders — the registry says so in its
  * own error text ("register at a different priority to shadow it (lowest
- * renders)"), and `entriesOfSlot` returns the first survivor of a
- * priority-sorted list. A larger number would have lost to the shipped picker
- * instead of shadowing it.
+ * renders)"). A larger number would lose to the shipped picker instead of
+ * shadowing it.
  */
 const SHADOW_PRIORITY = -1
 
@@ -1001,17 +524,12 @@ const SHADOW_PRIORITY = -1
  *
  * The packaged desktop app has no devtools, so a client half that fails to
  * register is indistinguishable from one that never loaded. Each stage is posted
- * to the Host half, which logs it next to its own `host 半边已 apply` line: the
- * pair tells the two cases apart immediately.
+ * to the Host half, which logs it beside its own line: the pair tells the two
+ * cases apart immediately.
  *
  * @param stage - a short description of the load stage reached.
  */
 const report = (stage) => {
-  // The renderer console reaches the desktop app log, which is captured in every
-  // diagnostics bundle. A POST to the Host half is kept as the richer channel,
-  // but it cannot be the only one: it is a second thing that can fail (trust
-  // fence, no route yet, offline), and a missing report then looks exactly like
-  // "apply was never called".
   try {
     console.error(`[model-picker] ${stage}`)
   } catch {
@@ -1032,8 +550,7 @@ const report = (stage) => {
 /**
  * The failure worth capturing happens *outside* apply: the client composition
  * builds this plugin object, then never applies it, and whatever it threw on the
- * way is only visible in the page — which the packaged desktop app gives no
- * devtools for. Both global hooks forward to the host log instead.
+ * way is only visible in the page.
  *
  * @param value - the thrown value, in any shape.
  * @returns a short description safe to log.
@@ -1070,184 +587,82 @@ window.__ModuleLoader__.load({
     return {
       name: PLUGIN,
       /**
-       * No fiber-level `inject`.
+       * Wait for the services the seat needs.
        *
-       * A required service that is not visible from this context keeps the whole
-       * entry in `loading`: Cordis never calls `apply`, and the client Loader
-       * turns that into `web boot: 1 entry did not activate`, i.e. a dead
-       * renderer. Waiting *inside* apply means an unmet dependency costs only the
-       * registration instead of the entire boot.
+       * The same set the shipped registration waits for, minus `commandUi` (this
+       * plugin contributes no `/model` command). Declaring them as fiber
+       * dependencies is safe: every one is registered by the time the composer
+       * renders, and a missing one is a composition error worth failing loudly
+       * rather than half-working.
        */
+      inject: ['locale', 'sessions', 'slots', 'remote', 'remote.session'],
       apply(ctx) {
         report(`apply 已调用（slots=${ctx.get('slots') === undefined ? '尚未就绪' : '就绪'}）`)
 
         /**
-         * The catalogue is built HERE, in `apply`, but it reads the `remote`
-         * service LAZILY.
+         * Register the seat through the shipped directory service.
          *
-         * Two facts pull in opposite directions and this is the seam between
-         * them:
-         *
-         *  - Event subscriptions must be installed from the plugin's own `apply`
-         *    fiber. The gateway registers a forwarded-event listener in the
-         *    CALLING fiber's private event domain, and a subscription made from a
-         *    `ctx.inject` callback lands in a different domain: `$on` returns a
-         *    disposer, so it looks successful, but the listener never fires.
-         *  - `remote` is frequently NOT visible yet when `apply` runs. Capturing
-         *    `ctx.get('remote')` here froze `undefined`, and every catalogue load
-         *    then answered "modelCatalog is unavailable".
-         *
-         * So the catalogue holds a resolver, not the face, and the subscription
-         * is attached as soon as the service appears.
+         * `ctx.inject` runs this callback once the named services are visible, so
+         * the registration lands at the same point the shipped one would. It is
+         * also re-run if a service goes away and returns, which is what keeps the
+         * seat from binding to `undefined` across a reconnect.
          */
-        const remoteFace = () => {
-          try { return ctx.get('remote') } catch { return undefined }
-        }
-        const catalog = createCatalog(remoteFace, (message) => { report(message) })
-        /**
-         * Attach the invalidation listeners, retrying once the remote exists.
-         *
-         * `ctx.inject` runs the callback as soon as the named services are
-         * visible, which is the point at which `$on` can be reached — and it runs
-         * in this same `apply` fiber, so the subscription still lands in the
-         * dispatching domain.
-         */
-        let detachCatalog = () => {}
-        const attachCatalog = () => {
-          const remote = remoteFace()
-          if (remote === undefined) return false
-          detachCatalog = catalog.attach(remote, (event) => {
-            report(`收到失效事件 ${event}`)
-          })
-          report(`失效订阅：已挂到 remote.$on`)
-          return true
-        }
-        if (!attachCatalog()) {
-          report('remote 尚未就绪，等它出现后再挂失效订阅')
-          if (typeof ctx.inject === 'function') {
-            ctx.inject(['remote'], () => { attachCatalog() })
-          }
-        }
-        const detachReset = typeof ctx.on === 'function'
-          ? ctx.on('connection/reset', () => { catalog.resetGeneration() })
-          : undefined
-        const sessions = (() => {
-          try { return ctx.get('sessions') } catch { return undefined }
-        })()
-        const shipped = (() => {
-          try { return ctx.get(MODEL_DIRECTORIES) } catch { return undefined }
-        })()
-        const directories = shipped !== undefined && typeof shipped.directoryFor === 'function'
-          ? shipped
-          : createDirectoryService(catalog, sessions, remoteFace)
-        const ownsDirectories = directories !== shipped
-        report(`目录来源：${ownsDirectories ? '本插件自带实现' : '复用官方 modelDirectories'}`)
-        const detachDirectories = ownsDirectories && typeof ctx.provide === 'function'
-          ? ctx.provide(MODEL_DIRECTORIES, directories)
-          : undefined
-        if (typeof ctx.effect === 'function') {
-          ctx.effect(() => {
-            detachCatalog()
-            detachReset?.()
-            detachDirectories?.()
-          }, 'dsh-model-picker: catalogue and directories')
-        }
+        ctx.inject(['slots', MODEL_DIRECTORIES], (scope) => {
+          const slots = scope.get('slots')
+          const models = scope.get(MODEL_DIRECTORIES)
+          const sessions = scope.get('sessions')
+          const locale = scope.get('locale')
+          const localeId = typeof locale?.getLocale === 'function'
+            ? String(locale.getLocale()?.locale ?? 'zh-CN')
+            : 'zh-CN'
 
-        const install = (scope) => {
-          try {
-            const at = scope ?? ctx
-            const slots = at.slots ?? ctx.get('slots')
-            if (slots === undefined) {
-              report('slots 服务仍不可用，槽位未注册')
-              return
-            }
-            const locale = ctx.get('locale')
-            const localeId = typeof locale?.getLocale === 'function'
-              ? String(locale.getLocale()?.locale ?? 'zh-CN')
-              : 'zh-CN'
+          if (slots === undefined || models === undefined) {
+            report(`槽位未注册：slots=${slots === undefined ? '缺失' : '就绪'} modelDirectories=${models === undefined ? '缺失' : '就绪'}`)
+            return
+          }
+
+          slots.inject(SLOT, () => {
+            report('槽位回调已运行，准备注册 occupant')
             /**
-             * Neither `ctx.remote` nor `ctx.remote.session` can be read through
-             * the property proxy without an `inject` entry — Cordis throws
-             * `cannot get property "remote.session" without inject`, which crashed
-             * this component on its first render and got the entry abdicated.
+             * The same registration shape the shipped picker uses, including the
+             * `conversation.input.model.label` child declaration.
              *
-             * `ctx.get(...)` returns `undefined` instead of throwing, so the
-             * picker degrades to its "could not load the model list" state rather
-             * than taking the whole slot down.
+             * That declaration is what keeps provider decorations working:
+             * `renderSlot` is only authorised for a child the entry declared
+             * itself, so a replacement that skipped it would silently delete
+             * every badge and availability hint mounted there.
              */
-            const remoteSession = at['remote.session'] ?? ctx.get('remote.session') ?? remoteFace()?.session
-
-            slots.inject(SLOT, () => {
-              report('槽位回调已运行，准备注册 occupant')
-              /**
-               * NO `children` declaration, on purpose.
-               *
-               * A child slot may be declared exactly once, and the shipped picker
-               * already declares `conversation.input.model.label` for its own
-               * occupant. Declaring it here threw during registration, which is
-               * what removed the shipped occupant and left the slot empty.
-               *
-               * The consequence is that provider decorations mounted on the label
-               * child do not render while this picker is in charge. Rendering them
-               * would require owning the declaration, i.e. the shipped
-               * `ui-model-selection` occupant being absent entirely.
-               */
-              const dispose = slots.register({
-                name: SLOT,
-                priority: SHADOW_PRIORITY,
-                inject: (sessionId) => {
-                  const sessionSessions = ctx.get('sessions')
-                  /**
-                   * The per-session directory is the data face of this picker.
-                   *
-                   * `directoryFor` is the shipped service's own entry point; when
-                   * this plugin had to provide the service, the fallback has the
-                   * same signature, so the component never knows the difference.
-                   */
-                  const directory = directories.directoryFor(sessionId)
-                  // The shipped directory projects inside its constructor and on
-                  // its subscriptions; it exposes no `sync`. Only this plugin's
-                  // fallback has one, so probe instead of assuming — calling it
-                  // unconditionally threw on the shipped service and took the
-                  // whole slot registration down with it.
-                  if (typeof directory?.sync === 'function') directory.sync()
-                  /**
-                   * The directory's own snapshot, reported once per registration.
-                   *
-                   * This is the line that tells the two "not refreshed" failure
-                   * modes apart: if the group count here stops matching what the
-                   * Host now offers, the directory is stale; if it tracks the Host
-                   * while the panel still shows old rows, the panel is not
-                   * rendering the update.
-                   */
-                  const snapshot = directory?.store?.getSnapshot?.()
-                  report(`目录快照：${Array.isArray(snapshot?.groups) ? snapshot.groups.length : 0} 组 / 状态 ${snapshot?.status ?? '?'}`)
-                  return {
-                    sessionId,
-                    localeId,
-                    remote: remoteFace(),
-                    remoteSession,
-                    sessions: sessionSessions,
-                    catalog,
-                    directory,
-                    available: isAvailable(sessionSessions, sessionId)
-                  }
+            const dispose = slots.register({
+              name: SLOT,
+              priority: SHADOW_PRIORITY,
+              children: {
+                [LABEL_CHILD_SLOT]: { kind: 'single', scope: 'session', inline: true }
+              },
+              inject: (sessionId) => {
+                const directory = models.directoryFor(sessionId)
+                const available = typeof sessions?.subagentAddress === 'function'
+                  ? sessions.subagentAddress(sessionId) === undefined
+                  : true
+                return {
+                  sessionId,
+                  localeId,
+                  available,
+                  // The shipped registration hands over the STORE, not the
+                  // controller; the component subscribes to it directly.
+                  directory: directory.store,
+                  load: () => {
+                    if (available) directory.load().catch(() => {})
+                  },
+                  select: (selection) => available
+                    ? directory.select(selection)
+                    : Promise.resolve(undefined)
                 }
-              }, ModelPicker)
-              report('occupant 已注册（priority ' + SHADOW_PRIORITY + '）')
-              return dispose
-            })
-          } catch (error) {
-            report(`槽位注册抛错：${error instanceof Error ? `${error.message}` : String(error)}`)
-          }
-        }
-
-        // Soft wait: `apply` has already run, so a service that never shows up
-        // can no longer fail the boot. The remotes are included because the
-        // picker cannot do anything without them, and waiting here keeps the
-        // failure to a missing control instead of a crashed one.
-        if (typeof ctx.inject === 'function') ctx.inject(['slots', 'remote', 'remote.session'], install)
-        else install(ctx)
+              }
+            }, ModelPicker)
+            report(`occupant 已注册（priority ${SHADOW_PRIORITY}）`)
+            return dispose
+          })
+        })
       }
     }
   }

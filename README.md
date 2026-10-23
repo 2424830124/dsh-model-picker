@@ -34,15 +34,19 @@ dsh plugin --profile <你的 profile> add /path/to/dsh-model-picker
 
 不想要了就直接停用或移除这个 bundle，不会影响模型本身是否可用。
 
-## 已知限制
+## 和官方选择器的关系
 
-**会丢掉 provider 插件挂在模型名上的装饰。** DSH 官方选择器声明了一个子槽位 `conversation.input.model.label`，provider 插件往那里挂徽标、可用性提示、促销标记之类的东西。替换者没法继承这个声明——子槽位只能声明一次，官方占用者即使被压住不渲染，它的声明依然有效。所以在这个选择器里，模型名后面不会有那些装饰。
+**只换界面，不换数据。** 模型列表、当前选择、切换、失效刷新——这些都还是 DSH 官方 `ui-model-selection` 的实现，本插件通过它的 `modelDirectories` 服务读取。所以：
 
-想同时要装饰和这套交互，只能停用官方的 `ui-model-selection` bundle，代价是它的 `/model` 命令一起消失。这是 DSH 槽位架构的限制，不是本插件能绕过的。
+- 你在 `/model` 命令里看到的和输入框里看到的，永远是同一个选择
+- provider 插件挂在模型名上的徽标、可用性提示，在这里照常显示
+- 官方插件升级后，数据层的行为会自动跟着变
+
+本插件替换的只是那层 UI：把两级菜单换成一次点开的可搜索列表，把思考档位拆成独立控件。
 
 ## 兼容性
 
-需要 DSH `0.2.1-rc` 及以上。模型数据全部走 DSH 自己的 client remote（`session.modelCatalog` / `session.selectModel`），插件本身不认识任何具体 provider——任何 provider 插件注册的模型都会出现在列表里。
+需要 DSH `0.2.1-rc` 及以上。插件本身不认识任何具体 provider——任何 provider 插件注册的模型都会出现在列表里。
 
 ## 开发
 

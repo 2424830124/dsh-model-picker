@@ -25,7 +25,15 @@ export function createModelPicker(React) {
   const { useCallback, useEffect, useMemo, useRef, useState } = React
 
   return function ModelPicker(props) {
-    const { sessionId, locked, renderSlot, directory, catalog: catalogFace, available } = props
+    /**
+     * The props bundle the shipped registration hands its own component.
+     *
+     * `directory` is the session directory's STORE (already subscribed-ready),
+     * `load` asks it to refresh, `select` submits a triple, and `available` says
+     * whether this session may change models at all. Nothing here reaches behind
+     * that bundle: the data layer is the shipped one, this file is the view.
+     */
+    const { sessionId, locked, renderSlot, directory, available, load, select: submit } = props
 
     const localeId = typeof props.localeId === 'string' ? props.localeId : 'zh-CN'
     const t = dictionaryFor(localeId)
@@ -36,11 +44,7 @@ export function createModelPicker(React) {
     const [query, setQuery] = useState('')
     const rootRef = useRef(null)
 
-    const state = readSnapshot(useState, useEffect, directory?.store) ?? {}
-    // `catalogFace` is the catalogue controller, not a store: its snapshot source
-    // is `store`. Passing the controller itself made the hook call a missing
-    // `getSnapshot` on first render.
-    const catalogState = readSnapshot(useState, useEffect, catalogFace?.store)
+    const state = readSnapshot(useState, useEffect, directory) ?? {}
     const groups = Array.isArray(state.groups) ? state.groups : []
     const failures = Array.isArray(state.failures) ? state.failures : []
     const selection = state.current ?? null
@@ -48,24 +52,11 @@ export function createModelPicker(React) {
     const busy = pending !== null || state.status === 'selecting'
 
     useEffect(() => {
-      /**
-       * Load the directory, not just a catalogue.
-       *
-       * In reuse mode `directory` is the shipped one and `catalogFace` is this
-       * plugin's own catalogue — loading the latter alone left the shipped
-       * directory's catalogue untouched, so its `groups` never advanced past
-       * whatever it held when the seat first mounted. `directory.load()` asks the
-       * object that actually feeds `state.groups`; its own `load` is idempotent
-       * and internally refreshes the catalogue it reads.
-       */
-      if (typeof directory?.load === 'function') {
-        const outcome = directory.load()
-        if (outcome !== undefined && typeof outcome.then === 'function') outcome.catch(() => {})
-      } else if (catalogFace !== undefined && catalogFace !== null) {
-        catalogFace.load()
-      }
+      // Ask the directory to load. It is idempotent: the shipped controller
+      // shares one in-flight request and re-projects when it settles.
+      if (typeof load === 'function') load()
       return undefined
-    }, [directory, catalogFace])
+    }, [load])
 
     useEffect(() => {
       if (panel === null) return undefined
@@ -87,16 +78,16 @@ export function createModelPicker(React) {
      * adapter defaults to a level records that level rather than an unset field.
      */
     const select = useCallback(async (group, model, reasoningEffort) => {
-      if (directory === undefined || directory === null) return
+      if (typeof submit !== 'function') return
       const effort = reasoningEffort ?? model?.reasoning?.defaultEffort
-      const result = await directory.select({
+      const result = await submit({
         provider: group.id,
         model: model.id,
         ...effort === undefined ? {} : { reasoningEffort: effort }
       })
       if (result?.ok !== true) return
       setPanel(null)
-    }, [directory])
+    }, [submit])
 
     const needle = query.trim().toLowerCase()
     const filtered = useMemo(() => {
@@ -142,10 +133,10 @@ export function createModelPicker(React) {
      * The label, in the shipped picker's addressable wrapper.
      *
      * The `data-provider-id` / `data-model-id` span is kept because CSS that
-     * targets one model by id still works. `renderSlot` is probed rather than
-     * assumed: the renderer hands an entry that binding only for children the
-     * entry declared itself, and this one deliberately declares none (the shipped
-     * occupant owns the declaration), so the plain name is what actually renders.
+     * targets one model by id still works. `renderSlot` renders the
+     * `conversation.input.model.label` child this entry declares, which is where
+     * provider plugins mount their badges; the fallback keeps the plain name
+     * visible when nothing is mounted there.
      */
     const renderLabel = (group, model, placement, selected) => h('span', {
       'data-provider-id': group?.id,
@@ -174,24 +165,21 @@ export function createModelPicker(React) {
 
     const notes = []
     /**
-     * Three independent problems, reported separately.
+     * Two independent problems, reported separately.
      *
-     * A catalogue failure belongs to the shared cache and affects every session;
-     * a selection failure belongs to this session's directory; a provider group
-     * that failed to load belongs to the catalogue's failure list and explains a
-     * group that is simply absent. Collapsing them into one message meant a
-     * failed switch erased the load error and vice versa.
+     * A load failure belongs to the shared directory (every session sees it); a
+     * selection failure belongs to this session. Merging them meant a failed
+     * switch erased the load error and vice versa.
      */
-    const catalogError = typeof catalogState?.error === 'string' ? catalogState.error : ''
     const selectionError = typeof state.error === 'string' ? state.error : ''
-    if (state.status === 'loading' && groups.length === 0 && catalogError.length === 0) {
+    if (state.status === 'loading' && groups.length === 0) {
       notes.push(h('div', { key: 'loading', className: 'dmp-note' }, t.loading))
     }
-    if (catalogError.length > 0 || selectionError.length > 0) {
+    if (selectionError.length > 0) {
       notes.push(h('div', { key: 'error', className: 'dmp-note dmp-note-error' },
-        catalogError.length > 0 ? catalogError : selectionError,
+        selectionError,
         h('div', null, h('button', {
-          type: 'button', className: 'dmp-retry', onClick: () => catalogFace?.refresh()
+          type: 'button', className: 'dmp-retry', onClick: () => { if (typeof load === 'function') load() }
         }, t.retry))))
     }
     // A provider group whose catalogue failed: say so, instead of leaving a
