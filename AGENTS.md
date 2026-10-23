@@ -130,6 +130,40 @@ binding 访问器可能每次返回新包装，按它做键会导致每次重挂
 顺带：`renderSlot` 只对**自己声明的**子槽位可用（否则抛 `SlotOwnershipError`），所以组件里的
 `renderSlot` 是探测式的——生产环境拿不到这个 binding。
 
+### 8. profile 里的本地链接必须是绝对路径
+
+报错长这样：
+
+```
+Error: client-modules: could not load "@huai_xin/dsh-model-picker":
+plugins/??@huai_xin/dsh-model-picker/client.js&rev=...:
+loaded without registering "@huai_xin/dsh-model-picker" via __ModuleLoader__.load
+```
+
+**这不一定是代码问题。** 本地目录安装会在
+`%USERPROFILE%\.dsh\profiles\<profile>\node_modules\@huai_xin\dsh-model-picker` 建一个符号链接。
+如果链接目标写成了相对路径（`..\..\..\..\..\..\Projects\dsh-model-picker`），它会从
+`node_modules\@huai_xin` 往上解析，得到 `C:\Users\Projects\dsh-model-picker`——**一个不存在的
+路径**。加载器读不到文件，于是报 "loaded without registering"，看起来像是 bundle 里的语法错误。
+
+自查：
+
+```powershell
+$link = "$env:USERPROFILE\.dsh\profiles\<profile>\node_modules\@huai_xin\dsh-model-picker"
+(Get-Item -LiteralPath $link -Force).Target      # 应当是一个绝对路径
+Test-Path -LiteralPath (Join-Path $link 'client.js')
+```
+
+修复（用绝对路径重建）：
+
+```powershell
+cmd /c "rmdir `"$link`""
+cmd /c "mklink /D `"$link`" `"E:\Projects\dsh-model-picker`""
+```
+
+> 排查时先排除这一条：`node --check client.js` 通过、且把产物当 classic script 用 `vm`
+> 跑一遍能正常注册，就说明代码没问题，问题在路径。
+
 ## 数据层契约（与官方 `ui-model-selection` 对齐）
 
 1. **全局目录**：一份、按 Host generation 作用域，所有会话共用；in-flight 去重；每次失效递增
