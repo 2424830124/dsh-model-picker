@@ -1,9 +1,25 @@
 {
   "name": "@huai_xin/dsh-model-picker",
   "version": "0.1.0",
-  "private": true,
+  "description": "A searchable, provider-grouped replacement for the DSH composer's model picker.",
   "type": "module",
-  "description": "A drop-in replacement for the composer's model picker.",
+  "license": "MIT",
+  "author": "huai_xin",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/2424830124/dsh-model-picker.git"
+  },
+  "homepage": "https://github.com/2424830124/dsh-model-picker#readme",
+  "bugs": {
+    "url": "https://github.com/2424830124/dsh-model-picker/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-plugin",
+    "model-picker",
+    "composer"
+  ],
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
@@ -18,8 +34,14 @@
     "package.json",
     "locale/*.json",
     "icon.svg",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node scripts/build.mjs && node test/unit/client.mjs",
+    "prepublishOnly": "node scripts/build.mjs"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

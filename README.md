@@ -2,10 +2,6 @@
 
 DSH（DeepSeek Harness）的一个插件：**替换输入框里的模型选择器**，做成可搜索、按 provider 分组的列表。
 
-- 只依赖 harness 自己的客户端 remote（`session.modelCatalog` / `session.selectModel`），所以**不认识任何具体 provider** ✓
-- 独立于任何 provider 插件：想用就装，不想要就停用，不影响模型是否可用 ✓
-- 是"影子 UI"（`conversation.input.model` 槽位带 `replaceRisk: shadows-shipped-ui` ✓），所以刻意做成单独一个 bundle
-
 ## 安装
 
 ```sh
@@ -63,14 +59,82 @@ dsh plugin --profile <profile> add <包名>                        # 发布后
 真要同时满足两者，只有让官方 `ui-model-selection` 的 occupant 完全缺席（停用那个 bundle），
 代价是它的 `/model` 命令贡献一起消失。这是架构限制，不是本插件的实现缺陷。
 
-## 已知范围（第一版）
+## 数据层（与官方 `ui-model-selection` 同一套契约）
 
-- 有：搜索、按 provider 分组、当前项高亮、Esc / 点击外部关闭、加载与错误态、中英双语
-- 有：模型与思考档位（reasoning effort）**两个独立控件**，各自一个浮层
-- 暂无：键盘上下选择、分组折叠
+数据不是自己拼的，走的是和官方相同的三层结构，`test/unit/client.mjs` 逐条钉住：
+
+**1. 全局目录（`ModelCatalogDirectory` 的等价物）**
+- 一份、按 Host generation 作用域，所有会话共用；in-flight 请求去重。
+- 每次失效递增 generation，旧请求的迟到响应**直接丢弃**，不会覆盖新值。
+- `reasoning` 记住每个模型的档位元数据，**模型离开目录后仍能显示档位名字**。
+
+**2. 会话级目录（`ModelDirectory` 的等价物）**
+- store 形状与官方一致：`{ current, routable, groups, failures, status, pending, error }`。
+- `current` = 会话显式选择 ?? 目录 `default`（官方同样的优先级）。加载中显示"加载中"，
+  而不是模型名，也不是"没有可用模型"。
+- `pending` 在 RPC 前后发布，触发器能显示正在结算的选择。
+- `select()` 带 generation 竞态保护：**后发起的胜出**，旧回复即便晚到也不写入。
+  （单测用突变验证过：去掉这个守卫，断言立刻失败。）
+- 切模型时带上适配器的默认档位，与官方提交的三元组一致。
+- `failures` 渲染为提示行，某个 provider 组加载失败不再静默消失。
+
+**3. `modelDirectories` 服务**
+- **优先复用官方已注册的服务**——这正是让输入框和 `/model` 弹窗共享同一份选择状态（含在途
+  状态）的关键。官方服务存在时不重复注册（重复 `ctx.provide` 会抛错）。
+- 官方服务缺席时（bundle 被停用、旧版本），本插件以同名提供一份**同契约**的实现，组件无感知。
+- 按 sessionId 键控目录，不按 binding 对象：binding 访问器可能每次返回新包装，按它做键会导致
+  每次重挂载都新建目录、丢掉在途状态。
+
+**四个失效事件 + `connection/reset`**：与官方监听集合完全一致；只听 `llm/adapters-updated`
+的旧版会在改设置/凭据后继续提供宿主已拒绝的模型。
+
+**子会话**：addressed subagent 会话里 Host 会拒绝 `selectModel`，官方 picker 在那种会话里
+什么都不渲染，本插件同样返回 `null`。
+
+**仍与官方不同**（有意保留的范围差异）：没有 `/model` 命令贡献，也不做 analytics 埋点——
+这两项属于官方 bundle，不在"替换输入框选择器"的职责内。
+
+## 工程结构
+
+源码在 `src/` 下按职责拆分，`client.js` 是**构建产物**（勿手改）：
+
+```
+src/
+  client.js          入口：模块注册 + 插件对象 + 装配（含服务复用与槽位注册）
+  core/
+    store.js         snapshot store 契约（getSnapshot/subscribe/set/update）
+    selection.js     readSelection（兼容各代字段拼写）、isAvailable（子会话探测）
+    catalog.js       全局目录：共享缓存、generation 失效、reasoning 记忆
+    directory.js     会话级目录：current/routable/pending/failures + 竞态保护
+    directories.js   modelDirectories 服务的自带实现（官方缺席时使用）
+  ui/
+    ModelPicker.js   组件：触发器 + 模型面板 + 档位面板
+    Chevron.js       展开箭头
+    dict.js          中英字典
+    styles.js        样式表（仅 --dsw-alias-* 主题令牌）
+scripts/build.mjs    零依赖打包器：按依赖顺序拼接 src/ → client.js
+client.js            构建产物，由 scripts/build.mjs 生成
+```
+
+**为什么需要构建**：Client 模块加载器给每个包只有一个浏览器入口
+（`exports["./client"]`），并以 classic script 执行，不会在运行时解析插件的 ESM 依赖图。
+所以源码拆开维护、构建时拼接成单文件，是既能保持可维护性、又不要求宿主提供它没有的能力的做法。
+
+打包器只做三件事：深度优先收集本地 `./x.js` 依赖、剥掉 `import`/`export` 语法、按依赖顺序
+拼接。它不做 tree-shaking，也不解析裸模块——遇到裸 import 会直接报错（宿主模块应从 factory
+的 `require` 取）。
+
+```sh
+node scripts/build.mjs    # 或 pnpm build：重新生成 client.js
+node test/unit/client.mjs # 或 pnpm test：构建 + 离线单测
+```
+
+单测会校验 `client.js` 是否由当前源码构建（每个模块有 `//# module:` 标记，且产物不得旧于
+任何源文件），避免改完源码忘记重新构建、让测试跑在过期产物上。
 
 ## 开发
 
 ```sh
-node test/unit/client.mjs      # 离线单测（无依赖，自带迷你 React）
+pnpm build                     # 重新生成 client.js
+pnpm test                      # 构建 + 离线单测（无依赖，自带迷你 React）
 ```
