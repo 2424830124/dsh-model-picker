@@ -28,6 +28,48 @@ import assert from 'node:assert/strict'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 
 const root = new URL('../../', import.meta.url)
+
+// ---------------------------------------------------------------------------
+// No shipped text file may start with a UTF-8 BOM.
+// ---------------------------------------------------------------------------
+// Checked BEFORE the manifest is parsed below, on purpose: a BOM makes
+// `JSON.parse` fail with "Unexpected token '\uFEFF'", and the installer rejects
+// the package and rolls the install back after the dependency was already
+// resolved. Editing a manifest with a tool that writes BOMs (PowerShell's
+// `Set-Content -Encoding UTF8` is the usual culprit on Windows) silently poisons
+// a release, so this runs first and names the file.
+{
+  const shipped = [
+    'package.json',
+    'index.js',
+    'client.js',
+    'cordis.patch.yml',
+    'README.md',
+    'AGENTS.md',
+    'icon.svg',
+    'LICENSE',
+    'locale/en.json',
+    'locale/zh.json',
+    'scripts/build.mjs',
+    'test/unit/client.mjs'
+  ]
+  const walkSources = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = new URL(`${entry.name}${entry.isDirectory() ? '/' : ''}`, dir)
+      if (entry.isDirectory()) walkSources(full)
+      else shipped.push(decodeURIComponent(full.pathname.replace(/^.*\/dsh-model-picker\//, '')))
+    }
+  }
+  walkSources(new URL('src/', root))
+  for (const file of shipped) {
+    const bytes = readFileSync(new URL(file, root))
+    assert.ok(
+      !(bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF),
+      `${file} starts with a UTF-8 BOM — the installer's JSON.parse rejects package.json and rolls the install back`
+    )
+  }
+}
+
 const pkg = JSON.parse(readFileSync(new URL('package.json', root), 'utf8'))
 
 // The bundle must be built from the current sources. Running the bundler here

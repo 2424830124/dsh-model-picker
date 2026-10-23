@@ -618,7 +618,7 @@ const CSS = `
 `
 
 //# module: src/ui/dict.js
-﻿/**
+/**
  * The picker's two dictionaries.
  *
  * Kept as a plain object rather than the Client locale service because the

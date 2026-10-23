@@ -97,3 +97,29 @@ const header = `/**
 writeFileSync(OUTPUT, `${header}${body}\n`, 'utf8')
 console.log(`bundled ${order.length} module(s) -> ${relative(root, OUTPUT)}`)
 for (const { file } of order) console.log(`  ${relative(root, file)}`)
+
+/**
+ * Refuse to leave a BOM in any file the package ships.
+ *
+ * The installer validates the installed package with a plain `JSON.parse`, and a
+ * leading U+FEFF makes that throw "Unexpected token" — the install is rejected
+ * and rolled back after the dependency was already resolved. On Windows the
+ * usual cause is an editor or a `Set-Content -Encoding UTF8` call writing the
+ * mark back into `package.json`, so this check runs on every build rather than
+ * being discovered at publish time.
+ */
+const BOM = Buffer.from([0xEF, 0xBB, 0xBF])
+const shipped = [
+  'package.json', 'index.js', 'client.js', 'cordis.patch.yml',
+  'README.md', 'AGENTS.md', 'icon.svg', 'LICENSE',
+  'locale/en.json', 'locale/zh.json'
+]
+const polluted = shipped.filter((name) => {
+  const path = resolve(root, name)
+  if (!existsSync(path)) return false
+  const head = readFileSync(path).subarray(0, 3)
+  return head.equals(BOM)
+})
+if (polluted.length > 0) {
+  throw new Error(`these files start with a UTF-8 BOM, which breaks the installer: ${polluted.join(', ')}`)
+}
