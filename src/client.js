@@ -125,26 +125,52 @@ window.__ModuleLoader__.load({
         report(`apply 已调用（slots=${ctx.get('slots') === undefined ? '尚未就绪' : '就绪'}）`)
 
         /**
-         * The catalogue, its subscriptions, and the directory service are built
-         * HERE, in `apply` itself — not inside the `ctx.inject` callback below.
+         * The catalogue is built HERE, in `apply`, but it reads the `remote`
+         * service LAZILY.
          *
-         * This is the one structural difference from the shipped picker that
-         * matters: the shipped plugin calls `ctx.remote.$on(...)` directly in its
-         * `apply` body. The gateway registers a forwarded-event listener in the
-         * calling fiber's private event domain (`events.subscribe(this.ctx, …)`),
-         * and a subscription made from a scope callback — even when that scope is
-         * the same object — is not in the domain the dispatcher publishes to, so
-         * the listener never fires. Building them here keeps the registration in
-         * the plugin's own fiber, exactly like the shipped plugin.
+         * Two facts pull in opposite directions and this is the seam between
+         * them:
+         *
+         *  - Event subscriptions must be installed from the plugin's own `apply`
+         *    fiber. The gateway registers a forwarded-event listener in the
+         *    CALLING fiber's private event domain, and a subscription made from a
+         *    `ctx.inject` callback lands in a different domain: `$on` returns a
+         *    disposer, so it looks successful, but the listener never fires.
+         *  - `remote` is frequently NOT visible yet when `apply` runs. Capturing
+         *    `ctx.get('remote')` here froze `undefined`, and every catalogue load
+         *    then answered "modelCatalog is unavailable".
+         *
+         * So the catalogue holds a resolver, not the face, and the subscription
+         * is attached as soon as the service appears.
          */
-        const remote = (() => {
+        const remoteFace = () => {
           try { return ctx.get('remote') } catch { return undefined }
-        })()
-        const catalog = createCatalog(remote, (message) => { report(message) })
-        const detachCatalog = catalog.attach(remote, (event) => {
-          report(`收到失效事件 ${event}`)
-        })
-        report(`失效订阅：${catalog.canAttach(remote) ? '已挂到 remote.$on' : 'remote 没有 $on，无法订阅'}`)
+        }
+        const catalog = createCatalog(remoteFace, (message) => { report(message) })
+        /**
+         * Attach the invalidation listeners, retrying once the remote exists.
+         *
+         * `ctx.inject` runs the callback as soon as the named services are
+         * visible, which is the point at which `$on` can be reached — and it runs
+         * in this same `apply` fiber, so the subscription still lands in the
+         * dispatching domain.
+         */
+        let detachCatalog = () => {}
+        const attachCatalog = () => {
+          const remote = remoteFace()
+          if (remote === undefined) return false
+          detachCatalog = catalog.attach(remote, (event) => {
+            report(`收到失效事件 ${event}`)
+          })
+          report(`失效订阅：已挂到 remote.$on`)
+          return true
+        }
+        if (!attachCatalog()) {
+          report('remote 尚未就绪，等它出现后再挂失效订阅')
+          if (typeof ctx.inject === 'function') {
+            ctx.inject(['remote'], () => { attachCatalog() })
+          }
+        }
         const detachReset = typeof ctx.on === 'function'
           ? ctx.on('connection/reset', () => { catalog.resetGeneration() })
           : undefined
@@ -156,7 +182,7 @@ window.__ModuleLoader__.load({
         })()
         const directories = shipped !== undefined && typeof shipped.directoryFor === 'function'
           ? shipped
-          : createDirectoryService(catalog, sessions, remote)
+          : createDirectoryService(catalog, sessions, remoteFace)
         const ownsDirectories = directories !== shipped
         report(`目录来源：${ownsDirectories ? '本插件自带实现' : '复用官方 modelDirectories'}`)
         const detachDirectories = ownsDirectories && typeof ctx.provide === 'function'
@@ -192,7 +218,7 @@ window.__ModuleLoader__.load({
              * picker degrades to its "could not load the model list" state rather
              * than taking the whole slot down.
              */
-            const remoteSession = at['remote.session'] ?? ctx.get('remote.session') ?? remote?.session
+            const remoteSession = at['remote.session'] ?? ctx.get('remote.session') ?? remoteFace()?.session
 
             slots.inject(SLOT, () => {
               report('槽位回调已运行，准备注册 occupant')
@@ -242,7 +268,7 @@ window.__ModuleLoader__.load({
                   return {
                     sessionId,
                     localeId,
-                    remote,
+                    remote: remoteFace(),
                     remoteSession,
                     sessions: sessionSessions,
                     catalog,

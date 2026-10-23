@@ -200,6 +200,63 @@ function mount(locale) {
 const { options, component } = mount('zh-CN')
 
 // ---------------------------------------------------------------------------
+// A `remote` that only becomes visible AFTER `apply` ran.
+// ---------------------------------------------------------------------------
+// This is the real boot order: the client composition calls a plugin's `apply`
+// before every service it needs is registered. Capturing `ctx.get('remote')` in
+// `apply` therefore froze `undefined`, and the picker then showed
+// "modelCatalog is unavailable" with a Retry button that could never work.
+// The catalogue must resolve the service lazily, and the invalidation listeners
+// must attach as soon as it appears.
+{
+  const lateRegistrations = []
+  const lateSlots = {
+    register: (opts, comp) => { lateRegistrations.push({ options: opts, component: comp }); return () => {} },
+    inject: (_slot, cb) => { cb(); return () => {} }
+  }
+  // Deliberately absent until the test publishes it.
+  let published
+  const lateCtx = {
+    get: (name) => {
+      if (name === 'locale') return { getLocale: () => ({ locale: 'en-US' }) }
+      if (name === 'sessions') return sessions
+      if (name === 'slots') return lateSlots
+      if (name === 'remote') return published
+      if (name === 'remote.session') return published?.session
+      return undefined
+    },
+    slots: lateSlots,
+    on: () => () => {},
+    // The slot registration waits for the full set; that wait is what runs the
+    // `install` callback once the runtime can satisfy it.
+    inject: (deps, callback) => {
+      if (deps.length === 1 && deps[0] === 'remote') return () => {}
+      callback(lateCtx)
+      return () => {}
+    }
+  }
+  plugin.apply(lateCtx)
+
+  assert.equal(lateRegistrations.length, 1,
+    'the slot registration still happens while `remote` is absent')
+  const lateCatalog = lateRegistrations[0].options.inject('late-1').catalog
+  assert.ok(lateCatalog, 'the catalogue exists even though remote was absent at apply time')
+
+  // `apply` saw no remote, so the catalogue cannot have loaded yet.
+  assert.notEqual(lateCatalog.store.getSnapshot().status, 'ready',
+    'nothing is loaded before the remote service exists')
+
+  // The service arrives, then an explicit load — exactly what the seat does.
+  published = remote
+  await lateCatalog.load()
+  const lateState = lateCatalog.store.getSnapshot()
+  assert.equal(lateState.status, 'ready',
+    'the catalogue loads once the remote service appears, instead of staying unavailable')
+  assert.equal(lateState.error, null, 'no "modelCatalog is unavailable" error is reported')
+  assert.ok((lateState.value?.groups ?? []).length > 0, 'the loaded catalogue carries the Host groups')
+}
+
+// ---------------------------------------------------------------------------
 // The directory layer: the store contract the shipped picker also reads.
 // ---------------------------------------------------------------------------
 // Without a shipped `modelDirectories` service the plugin must provide its own

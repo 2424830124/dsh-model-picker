@@ -96,10 +96,15 @@ const INVALIDATION_EVENTS = Object.freeze([
  * model's effort metadata *after* the model leaves the catalogue — so a level
  * still shows its name while its model is gone.
  *
- * @param remote - the client remote face carrying `session.modelCatalog`.
+ * @param resolveRemote - returns the client remote face carrying `session.modelCatalog`.
+ *   A THUNK, not the face itself: this catalogue is built in `apply`, where the
+ *   `remote` service is often not visible yet (it arrives later in the client boot
+ *   sequence). Capturing the value here froze `undefined` and every load then
+ *   reported "modelCatalog is unavailable".
+ * @param onDiagnostic - optional sink for load-stage notes.
  * @returns the catalogue controller.
  */
-function createCatalog(remote, onDiagnostic) {
+function createCatalog(resolveRemote, onDiagnostic) {
   const store = createStore({ value: null, status: 'idle', error: null })
   const reasoning = new Map()
   // Bumped by every invalidation. A response that resolves under an older
@@ -112,6 +117,11 @@ function createCatalog(remote, onDiagnostic) {
     try { onDiagnostic?.(message) } catch { /* diagnostics never break the load */ }
   }
 
+  /** The remote face as it is right now, or undefined while the service is absent. */
+  const currentRemote = () => {
+    try { return typeof resolveRemote === 'function' ? resolveRemote() : resolveRemote } catch { return undefined }
+  }
+
   const reasoningFor = (selection) => selection === null || selection === undefined
     ? undefined
     : reasoning.get(JSON.stringify([selection.provider, selection.model]))
@@ -120,8 +130,10 @@ function createCatalog(remote, onDiagnostic) {
     const state = store.getSnapshot()
     if (state.status === 'ready' && state.value !== null) return Promise.resolve(state.value)
     if (inflight !== undefined) return inflight
+    const remote = currentRemote()
     const run = remote?.session?.modelCatalog
     if (typeof run !== 'function') {
+      note('modelCatalog 不可用：remote 尚未就绪')
       store.set({ value: state.value, status: 'error', error: 'modelCatalog is unavailable' })
       return Promise.resolve(undefined)
     }
@@ -491,10 +503,17 @@ function createDirectory(catalog, projectedFace, remote, sessionId) {
  *
  * @param catalog - the shared catalogue controller.
  * @param sessions - the sessions service face.
- * @param remote - the client remote face.
+ * @param resolveRemote - returns the client remote face. A thunk for the same
+ *   reason the catalogue takes one: the service is often not visible yet when
+ *   this object is built, and capturing it froze `undefined`.
  * @returns the service object with `directoryFor`.
  */
-function createDirectoryService(catalog, sessions, remote) {
+function createDirectoryService(catalog, sessions, resolveRemote) {
+  /** The remote face as it is right now, or undefined while the service is absent. */
+  const currentRemote = () => {
+    try { return typeof resolveRemote === 'function' ? resolveRemote() : resolveRemote } catch { return undefined }
+  }
+
   /**
    * Keyed by session id, not by binding object.
    *
@@ -518,7 +537,7 @@ function createDirectoryService(catalog, sessions, remote) {
     const projectedFace = (() => {
       try { return binding?.session?.projections?.faceOf?.('modelSelection') } catch { return undefined }
     })()
-    const directory = createDirectory(catalog, projectedFace, remote, sessionId)
+    const directory = createDirectory(catalog, projectedFace, currentRemote(), sessionId)
     directories.set(key, directory)
     return directory
   }
@@ -1063,26 +1082,52 @@ window.__ModuleLoader__.load({
         report(`apply 已调用（slots=${ctx.get('slots') === undefined ? '尚未就绪' : '就绪'}）`)
 
         /**
-         * The catalogue, its subscriptions, and the directory service are built
-         * HERE, in `apply` itself — not inside the `ctx.inject` callback below.
+         * The catalogue is built HERE, in `apply`, but it reads the `remote`
+         * service LAZILY.
          *
-         * This is the one structural difference from the shipped picker that
-         * matters: the shipped plugin calls `ctx.remote.$on(...)` directly in its
-         * `apply` body. The gateway registers a forwarded-event listener in the
-         * calling fiber's private event domain (`events.subscribe(this.ctx, …)`),
-         * and a subscription made from a scope callback — even when that scope is
-         * the same object — is not in the domain the dispatcher publishes to, so
-         * the listener never fires. Building them here keeps the registration in
-         * the plugin's own fiber, exactly like the shipped plugin.
+         * Two facts pull in opposite directions and this is the seam between
+         * them:
+         *
+         *  - Event subscriptions must be installed from the plugin's own `apply`
+         *    fiber. The gateway registers a forwarded-event listener in the
+         *    CALLING fiber's private event domain, and a subscription made from a
+         *    `ctx.inject` callback lands in a different domain: `$on` returns a
+         *    disposer, so it looks successful, but the listener never fires.
+         *  - `remote` is frequently NOT visible yet when `apply` runs. Capturing
+         *    `ctx.get('remote')` here froze `undefined`, and every catalogue load
+         *    then answered "modelCatalog is unavailable".
+         *
+         * So the catalogue holds a resolver, not the face, and the subscription
+         * is attached as soon as the service appears.
          */
-        const remote = (() => {
+        const remoteFace = () => {
           try { return ctx.get('remote') } catch { return undefined }
-        })()
-        const catalog = createCatalog(remote, (message) => { report(message) })
-        const detachCatalog = catalog.attach(remote, (event) => {
-          report(`收到失效事件 ${event}`)
-        })
-        report(`失效订阅：${catalog.canAttach(remote) ? '已挂到 remote.$on' : 'remote 没有 $on，无法订阅'}`)
+        }
+        const catalog = createCatalog(remoteFace, (message) => { report(message) })
+        /**
+         * Attach the invalidation listeners, retrying once the remote exists.
+         *
+         * `ctx.inject` runs the callback as soon as the named services are
+         * visible, which is the point at which `$on` can be reached — and it runs
+         * in this same `apply` fiber, so the subscription still lands in the
+         * dispatching domain.
+         */
+        let detachCatalog = () => {}
+        const attachCatalog = () => {
+          const remote = remoteFace()
+          if (remote === undefined) return false
+          detachCatalog = catalog.attach(remote, (event) => {
+            report(`收到失效事件 ${event}`)
+          })
+          report(`失效订阅：已挂到 remote.$on`)
+          return true
+        }
+        if (!attachCatalog()) {
+          report('remote 尚未就绪，等它出现后再挂失效订阅')
+          if (typeof ctx.inject === 'function') {
+            ctx.inject(['remote'], () => { attachCatalog() })
+          }
+        }
         const detachReset = typeof ctx.on === 'function'
           ? ctx.on('connection/reset', () => { catalog.resetGeneration() })
           : undefined
@@ -1094,7 +1139,7 @@ window.__ModuleLoader__.load({
         })()
         const directories = shipped !== undefined && typeof shipped.directoryFor === 'function'
           ? shipped
-          : createDirectoryService(catalog, sessions, remote)
+          : createDirectoryService(catalog, sessions, remoteFace)
         const ownsDirectories = directories !== shipped
         report(`目录来源：${ownsDirectories ? '本插件自带实现' : '复用官方 modelDirectories'}`)
         const detachDirectories = ownsDirectories && typeof ctx.provide === 'function'
@@ -1130,7 +1175,7 @@ window.__ModuleLoader__.load({
              * picker degrades to its "could not load the model list" state rather
              * than taking the whole slot down.
              */
-            const remoteSession = at['remote.session'] ?? ctx.get('remote.session') ?? remote?.session
+            const remoteSession = at['remote.session'] ?? ctx.get('remote.session') ?? remoteFace()?.session
 
             slots.inject(SLOT, () => {
               report('槽位回调已运行，准备注册 occupant')
@@ -1180,7 +1225,7 @@ window.__ModuleLoader__.load({
                   return {
                     sessionId,
                     localeId,
-                    remote,
+                    remote: remoteFace(),
                     remoteSession,
                     sessions: sessionSessions,
                     catalog,

@@ -27,10 +27,15 @@ export const INVALIDATION_EVENTS = Object.freeze([
  * model's effort metadata *after* the model leaves the catalogue — so a level
  * still shows its name while its model is gone.
  *
- * @param remote - the client remote face carrying `session.modelCatalog`.
+ * @param resolveRemote - returns the client remote face carrying `session.modelCatalog`.
+ *   A THUNK, not the face itself: this catalogue is built in `apply`, where the
+ *   `remote` service is often not visible yet (it arrives later in the client boot
+ *   sequence). Capturing the value here froze `undefined` and every load then
+ *   reported "modelCatalog is unavailable".
+ * @param onDiagnostic - optional sink for load-stage notes.
  * @returns the catalogue controller.
  */
-export function createCatalog(remote, onDiagnostic) {
+export function createCatalog(resolveRemote, onDiagnostic) {
   const store = createStore({ value: null, status: 'idle', error: null })
   const reasoning = new Map()
   // Bumped by every invalidation. A response that resolves under an older
@@ -43,6 +48,11 @@ export function createCatalog(remote, onDiagnostic) {
     try { onDiagnostic?.(message) } catch { /* diagnostics never break the load */ }
   }
 
+  /** The remote face as it is right now, or undefined while the service is absent. */
+  const currentRemote = () => {
+    try { return typeof resolveRemote === 'function' ? resolveRemote() : resolveRemote } catch { return undefined }
+  }
+
   const reasoningFor = (selection) => selection === null || selection === undefined
     ? undefined
     : reasoning.get(JSON.stringify([selection.provider, selection.model]))
@@ -51,8 +61,10 @@ export function createCatalog(remote, onDiagnostic) {
     const state = store.getSnapshot()
     if (state.status === 'ready' && state.value !== null) return Promise.resolve(state.value)
     if (inflight !== undefined) return inflight
+    const remote = currentRemote()
     const run = remote?.session?.modelCatalog
     if (typeof run !== 'function') {
+      note('modelCatalog 不可用：remote 尚未就绪')
       store.set({ value: state.value, status: 'error', error: 'modelCatalog is unavailable' })
       return Promise.resolve(undefined)
     }

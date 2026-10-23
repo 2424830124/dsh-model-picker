@@ -12,10 +12,17 @@ import { createDirectory } from './directory.js'
  *
  * @param catalog - the shared catalogue controller.
  * @param sessions - the sessions service face.
- * @param remote - the client remote face.
+ * @param resolveRemote - returns the client remote face. A thunk for the same
+ *   reason the catalogue takes one: the service is often not visible yet when
+ *   this object is built, and capturing it froze `undefined`.
  * @returns the service object with `directoryFor`.
  */
-export function createDirectoryService(catalog, sessions, remote) {
+export function createDirectoryService(catalog, sessions, resolveRemote) {
+  /** The remote face as it is right now, or undefined while the service is absent. */
+  const currentRemote = () => {
+    try { return typeof resolveRemote === 'function' ? resolveRemote() : resolveRemote } catch { return undefined }
+  }
+
   /**
    * Keyed by session id, not by binding object.
    *
@@ -39,7 +46,7 @@ export function createDirectoryService(catalog, sessions, remote) {
     const projectedFace = (() => {
       try { return binding?.session?.projections?.faceOf?.('modelSelection') } catch { return undefined }
     })()
-    const directory = createDirectory(catalog, projectedFace, remote, sessionId)
+    const directory = createDirectory(catalog, projectedFace, currentRemote(), sessionId)
     directories.set(key, directory)
     return directory
   }
