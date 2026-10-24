@@ -343,24 +343,129 @@ function createEffortSlider(React) {
    * height. `dx` / `dy` / `sz` / `rot` stop the squares from marching in step, and
    * the per-particle `--i` turns one keyframe into a continuous stream (see the
    * negative `animation-delay` in the stylesheet).
+   *
+   * The entries are ordered so that taking the FIRST N of them always gives a spread
+   * across the whole cross-section: the level only ever slices this table, it never
+   * reorders it. `dy0` therefore alternates up/down rather than counting from -11 to
+   * 11, which would leave a low level emitting only from the top edge.
    */
   const EMIT = [
-    { dy0: -11, dx: -58, dy: -3, sz: 4, rot: 0 },
-    { dy0: -7, dx: -74, dy: -5, sz: 3, rot: 45 },
-    { dy0: -3, dx: -62, dy: -1, sz: 5, rot: 0 },
-    { dy0: 1, dx: -88, dy: 2, sz: 3, rot: 90 },
-    { dy0: 5, dx: -66, dy: 4, sz: 4, rot: 0 },
-    { dy0: 9, dx: -80, dy: 6, sz: 3, rot: 45 },
-    { dy0: -9, dx: -92, dy: -6, sz: 3, rot: 90 },
-    { dy0: -5, dx: -54, dy: -2, sz: 4, rot: 0 },
-    { dy0: -1, dx: -70, dy: 0, sz: 3, rot: 45 },
-    { dy0: 3, dx: -84, dy: 3, sz: 4, rot: 0 },
-    { dy0: 7, dx: -60, dy: 5, sz: 3, rot: 90 },
-    { dy0: 11, dx: -76, dy: 7, sz: 3, rot: 0 },
-    { dy0: -8, dx: -68, dy: -4, sz: 4, rot: 45 },
-    { dy0: 0, dx: -90, dy: 1, sz: 3, rot: 0 },
-    { dy0: 6, dx: -52, dy: 4, sz: 4, rot: 90 },
-    { dy0: -2, dx: -78, dy: -1, sz: 3, rot: 0 }
+    { dy0: 0, dx: -143, dy: 1, sz: 3, rot: 0 },
+    { dy0: -8, dx: -118, dy: -4, sz: 4, rot: 45 },
+    { dy0: 8, dx: -124, dy: 5, sz: 3, rot: 90 },
+    { dy0: -4, dx: -98, dy: -2, sz: 4, rot: 0 },
+    { dy0: 4, dx: -108, dy: 3, sz: 4, rot: 45 },
+    { dy0: -11, dx: -130, dy: -6, sz: 3, rot: 90 },
+    { dy0: 11, dx: -136, dy: 7, sz: 3, rot: 0 },
+    { dy0: -2, dx: -88, dy: -1, sz: 3, rot: 45 },
+    { dy0: 2, dx: -95, dy: 2, sz: 4, rot: 0 },
+    { dy0: -6, dx: -150, dy: -3, sz: 3, rot: 90 },
+    { dy0: 6, dx: -114, dy: 4, sz: 4, rot: 45 },
+    { dy0: -9, dx: -104, dy: -5, sz: 3, rot: 0 },
+    { dy0: 9, dx: -128, dy: 6, sz: 3, rot: 90 },
+    { dy0: -1, dx: -91, dy: 0, sz: 4, rot: 45 },
+    { dy0: 1, dx: -101, dy: 1, sz: 3, rot: 0 },
+    { dy0: -5, dx: -110, dy: -2, sz: 4, rot: 90 },
+    { dy0: 5, dx: -121, dy: 3, sz: 3, rot: 0 },
+    { dy0: -3, dx: -85, dy: -1, sz: 3, rot: 45 },
+    // A second pass over the same cross-section, offset in time by the per-particle
+    // delay: it doubles the density without making the stream look striped, and gives
+    // the high levels enough material to read as a real plume.
+    { dy0: -10, dx: -108, dy: -5, sz: 3, rot: 0 },
+    { dy0: 10, dx: -104, dy: 5, sz: 3, rot: 45 },
+    { dy0: -7, dx: -140, dy: -3, sz: 4, rot: 90 },
+    { dy0: 7, dx: -134, dy: 4, sz: 4, rot: 0 },
+    { dy0: -5, dx: -95, dy: -2, sz: 3, rot: 45 },
+    { dy0: 5, dx: -91, dy: 2, sz: 3, rot: 90 },
+    { dy0: -12, dx: -128, dy: -6, sz: 3, rot: 0 },
+    { dy0: 12, dx: -121, dy: 6, sz: 3, rot: 45 },
+    { dy0: -3, dx: -146, dy: -1, sz: 4, rot: 90 },
+    { dy0: 3, dx: -143, dy: 1, sz: 4, rot: 0 },
+    { dy0: -1, dx: -101, dy: 0, sz: 3, rot: 45 },
+    { dy0: 1, dx: -98, dy: 0, sz: 3, rot: 0 },
+    // A third pass. The high levels need enough material to read as a dense plume
+    // rather than a sparse spray, and because only a slice of this table is rendered
+    // the extra entries cost the low levels nothing. The timing stagger in the
+    // stylesheet spreads every pass out, so density rises without banding.
+    { dy0: -9, dx: -114, dy: -4, sz: 4, rot: 0 },
+    { dy0: 9, dx: -110, dy: 4, sz: 3, rot: 45 },
+    { dy0: -4, dx: -136, dy: -2, sz: 3, rot: 90 },
+    { dy0: 4, dx: -130, dy: 2, sz: 4, rot: 0 },
+    { dy0: -11, dx: -124, dy: -5, sz: 3, rot: 45 },
+    { dy0: 11, dx: -118, dy: 5, sz: 3, rot: 90 },
+    { dy0: -6, dx: -95, dy: -3, sz: 4, rot: 0 },
+    { dy0: 6, dx: -91, dy: 3, sz: 3, rot: 45 },
+    { dy0: -2, dx: -140, dy: -1, sz: 3, rot: 90 },
+    { dy0: 2, dx: -134, dy: 1, sz: 4, rot: 0 },
+    { dy0: -8, dx: -104, dy: -4, sz: 3, rot: 45 },
+    { dy0: 8, dx: -101, dy: 4, sz: 3, rot: 90 },
+    // A fourth pass, different seam. Each pass re-covers the same cross-section at a
+    // different spacing so the stream stays dense instead of clumping into bands; the
+    // per-particle delay in the stylesheet then interleaves all four.
+    { dy0: -10, dx: -121, dy: -5, sz: 3, rot: 0 },
+    { dy0: 10, dx: -114, dy: 5, sz: 4, rot: 45 },
+    { dy0: -5, dx: -143, dy: -2, sz: 3, rot: 90 },
+    { dy0: 5, dx: -136, dy: 2, sz: 3, rot: 0 },
+    { dy0: -12, dx: -108, dy: -6, sz: 3, rot: 45 },
+    { dy0: 12, dx: -104, dy: 6, sz: 3, rot: 90 },
+    { dy0: -7, dx: -128, dy: -3, sz: 4, rot: 0 },
+    { dy0: 7, dx: -124, dy: 3, sz: 3, rot: 45 },
+    { dy0: -1, dx: -88, dy: 0, sz: 4, rot: 90 },
+    { dy0: 1, dx: -91, dy: 0, sz: 3, rot: 0 },
+    { dy0: -9, dx: -134, dy: -4, sz: 3, rot: 45 },
+    { dy0: 9, dx: -130, dy: 4, sz: 4, rot: 90 },
+    { dy0: -4, dx: -98, dy: -2, sz: 3, rot: 0 },
+    { dy0: 4, dx: -95, dy: 2, sz: 3, rot: 45 },
+    { dy0: -11, dx: -118, dy: -5, sz: 4, rot: 90 },
+    { dy0: 11, dx: -110, dy: 5, sz: 3, rot: 0 },
+    { dy0: -3, dx: -150, dy: -1, sz: 3, rot: 45 },
+    { dy0: 3, dx: -140, dy: 1, sz: 4, rot: 90 }
+  ]
+
+  /**
+   * How much of the exhaust a level gets.
+   *
+   * The amount of work a level asks for is the one thing the control is saying, so
+   * the exhaust scales with it and the spread between the ends is deliberately wide:
+   * the lowest level emits a handful of squares barely past the knob, the highest
+   * emits the whole table and throws them roughly three times as far. A narrow range
+   * (the first version went 0.28..1.00) made every level look the same at a glance.
+   *
+   * @param index - the level's position, 0-based.
+   * @param count - how many levels the model declares.
+   * @returns `{ share, reach }`, both 0..1.
+   */
+  const exhaustFor = (index, count) => {
+    if (count <= 1) return { share: 0.5, reach: 0.5 }
+    const at = index / (count - 1)
+    // The curve is EASED rather than linear so the ends separate visually, and the
+    // floor is low enough that the lowest level is a scatter of a few squares rather
+    // than a plume. The reach tops out at 1.0 (the table's own distances) so the
+    // furthest level still lands inside the rail rather than being clipped by it.
+    const eased = at * at
+    return { share: 0.08 + eased * 0.92, reach: 0.22 + at * 0.78 }
+  }
+
+  /**
+   * The streaks left behind the squares.
+   *
+   * These read as a SHEET of parallel lines, not as a wedge: every streak is the same
+   * length and the same opacity, and they are evenly spaced down the knob's full
+   * height. An earlier version tapered them (long in the middle, short at the edges)
+   * so the silhouette converged on the knob like a flame, which is not what the bar
+   * should look like — the exhaust leaves the whole cross-section at once.
+   *
+   * The trail is reserved for the TOP level only (see `withTrail` below): it marks the
+   * ceiling of the scale, and drawing it at every level left nothing to escalate to.
+   *
+   * `off` is a PIXEL offset from the knob's centre line, not a percentage: the emitter
+   * is a zero-height box, so a percentage resolves against zero and stacks every
+   * streak on the centre. The spread covers the knob's diameter (28px) edge to edge.
+   */
+  const TRAIL = [
+    { off: -12 }, { off: -9 }, { off: -6 }, { off: -3 },
+    { off: 0 },
+    { off: 3 }, { off: 6 }, { off: 9 }, { off: 12 }
   ]
 
   return function EffortSlider({ efforts, activeId, disabled, onChange, t, caption }) {
@@ -394,6 +499,17 @@ function createEffortSlider(React) {
 
     // A model with just one effort keeps its stop in the middle.
     const position = (at) => count <= 1 ? '50%' : `${(at / (count - 1)) * 100}%`
+
+    // The level drives the exhaust: more of the table, and thrown further.
+    const exhaust = exhaustFor(index, count)
+    /**
+     * The trail belongs to the top level only.
+     *
+     * It is the visual ceiling of the scale — the thing the last stop has that no
+     * other stop does. Drawing it at every level (the first version) made the top
+     * level feel like more of the same instead of the end of the range.
+     */
+    const withTrail = count > 1 && index === count - 1
 
     return h('div', {
       // `dmp-slider-dragging` drops the left transition on the knob, the fill and
@@ -469,9 +585,22 @@ function createEffortSlider(React) {
            * track, so it shares the knob's coordinate space and its transition —
            * which is what keeps the spawn point under the knob while it moves.
            * The rail's clip-path trims whatever drifts past the end cap.
+           *
+           * How MANY particles exist and how FAR they travel both scale with the
+           * level: `--dmp-emit-reach` multiplies every particle's `dx` / `dy` in the
+           * stylesheet, and only the first `share` of the table is rendered at all.
+           * Keeping the unused entries out of the DOM (rather than hiding them) also
+           * means a low level runs a couple of animations instead of eighteen.
            */
-          h('span', { className: 'dmp-emit', 'aria-hidden': true },
-            EMIT.map((particle, at) => h('i', {
+          h('span', {
+            className: 'dmp-emit',
+            'aria-hidden': true,
+            // The top level is what turns the trail on; CSS cross-fades the change.
+            'data-trail': withTrail ? 'on' : 'off',
+            style: { '--dmp-emit-reach': exhaust.reach }
+          },
+          EMIT.slice(0, Math.max(2, Math.round(EMIT.length * exhaust.share)))
+            .map((particle, at) => h('i', {
               key: at,
               className: 'dmp-emit-p',
               style: {
@@ -482,6 +611,14 @@ function createEffortSlider(React) {
                 '--sz': `${particle.sz}px`,
                 '--rot': `${particle.rot}deg`
               }
+            })),
+            // The trail is always in the DOM; `data-trail` fades it in at the top level
+            // only. Mounting it conditionally made it pop in and out as the knob
+            // crossed the last stop, which was the one abrupt moment in the control.
+            TRAIL.map((streak, at) => h('i', {
+              key: `trail-${at}`,
+              className: 'dmp-emit-trail',
+              style: { '--n': at, '--off': `${streak.off}px` }
             }))),
           h('div', { className: 'dmp-slider-dots', 'aria-hidden': true },
             efforts.map((effort, at) => h('span', {
@@ -823,31 +960,80 @@ const CSS = `
 .dmp-emit { position: absolute; top: 50%; left: var(--dmp-effort-at);
   width: 0; height: 0; z-index: 3; pointer-events: none;
   transition: left .15s ease-out; }
-/* One square. The dy0 offset spreads the spawn points down the knob cross-section; the
-   extra dy/dx send each one its own way so they do not travel as a block. */
+/* One square. The dy0 offset spreads the spawn points down the knob cross-section;
+   the extra dy/dx send each one its own way so they do not travel as a block.
+
+   The colour is FIXED WHITE, not a theme token. The particles are meant to read as
+   light thrown off the bar, and the theme's primary label flips to near-black on a
+   light surface — which painted black specks over a pale blue fill. White is the one
+   value that works against both surfaces, so it is deliberately not themed.
+   --dmp-emit-reach (set per level) multiplies the travel: a low level throws its
+   squares a short way, a high level throws them much further. */
 .dmp-emit-p { position: absolute; left: 0; top: 0;
   width: var(--sz, 4px); height: var(--sz, 4px); border-radius: 1px;
-  background: color-mix(in srgb, var(--dsw-alias-label-primary) 92%, transparent);
-  box-shadow: 0 0 4px color-mix(in srgb,
-    var(--dmp-accent) 80%, transparent);
+  background: #fff;
+  box-shadow: 0 0 4px #fff;
   opacity: 0; transform: translate(-50%, -50%);
-  animation: dmp-emit 1.7s cubic-bezier(.25,.1,.6,1) infinite;
-  animation-delay: calc(var(--i) * -106ms); }
-/* The streak left behind the sheet of squares. */
-.dmp-emit::before { content: ''; position: absolute; right: 4px; top: 50%;
-  width: 54px; height: 8px; transform: translateY(-50%); border-radius: 6px;
+  /* Speed and rate.
+     The duration is how fast one square crosses its path; the delay is how far apart
+     consecutive squares are in time. Shortening both raises the speed AND the firing
+     rate: 1.7s / 106ms read as a lazy drift, 1.05s / 58ms reads as a jet. The delay
+     stays well under the duration on purpose — it has to, or the stream develops a
+     visible seam where one cycle hands over to the next. */
+  animation: dmp-emit 1.05s cubic-bezier(.22,.08,.62,1) infinite;
+  animation-delay: calc(var(--i) * -58ms); }
+/* The streaks left behind the sheet of squares.
+   A SHEET of parallel lines, not a wedge: all nine are the same length, the same
+   weight and the same opacity, evenly spaced across the knob's diameter. An earlier
+   version tapered them and let each drift, which made the silhouette converge on the
+   knob like a flame; the exhaust should leave the whole cross-section at once, so the
+   lines are deliberately uniform. Only the total length follows the level's reach.
+
+   The offset is a PIXEL amount around the centre, not a percentage: the emitter is a
+   zero-height box, and a percentage top resolves against that zero height, which
+   collapsed every streak onto the centre line.
+
+   The trail is ALWAYS in the DOM and fades in and out through opacity, rather than
+   being mounted only for the top level. Mounting it on the fly made it pop into
+   existence the instant the knob reached the last stop and vanish the instant it left
+   — the one jarring moment in an otherwise smooth control. Because opacity carries
+   the on/off state, the pulse animation drives filter instead, so the two never
+   fight over the same property. */
+.dmp-emit-trail { position: absolute; right: 4px; top: 50%;
+  width: calc(150px * var(--dmp-emit-reach, 1));
+  height: 2px; border-radius: 1px;
+  transform: translateY(calc(-50% + var(--off, 0px)));
   background: linear-gradient(270deg,
-    color-mix(in srgb, var(--dsw-alias-label-primary) 30%, transparent),
-    color-mix(in srgb, var(--dsw-alias-label-primary) 8%, transparent) 45%,
-    transparent);
-  filter: blur(2px); animation: dmp-emit-trail 1.7s ease-in-out infinite; }
+    #fff 0%,
+    #fff 8%,
+    color-mix(in srgb, #fff 62%, transparent) 26%,
+    color-mix(in srgb, #fff 30%, transparent) 50%,
+    color-mix(in srgb, #fff 11%, transparent) 74%,
+    transparent 100%);
+  opacity: 0;
+  transition: opacity .55s ease;
+  /* The same softness the single bar had: enough to melt the lines into one volume of
+     light at the knob, not enough to lose them as separate lines further out. */
+  filter: blur(1.5px);
+  animation: dmp-emit-pulse 1.7s ease-in-out infinite;
+  /* Staggered per streak so they shimmer out of step instead of pulsing as one band. */
+  animation-delay: calc(var(--n, 0) * -140ms); }
+/* The top level is the only one that shows the trail, but the change is a fade. */
+.dmp-emit[data-trail="on"] .dmp-emit-trail { opacity: .78; }
 @keyframes dmp-emit {
   0% { transform: translate(-50%, -50%) translate(0, var(--dy0)) scale(1); opacity: 0; }
   14% { opacity: .95; }
   70% { opacity: .5; }
   100% { transform: translate(-50%, -50%)
-    translate(var(--dx), calc(var(--dy0) + var(--dy))) scale(.2) rotate(var(--rot)); opacity: 0; } }
-@keyframes dmp-emit-trail { 0%, 100% { opacity: .3; } 50% { opacity: .75; } }
+    translate(calc(var(--dx) * var(--dmp-emit-reach, 1)),
+      calc(var(--dy0) + var(--dy) * var(--dmp-emit-reach, 1)))
+    scale(.2) rotate(var(--rot)); opacity: 0; } }
+/* The pulse drives filter, not opacity: opacity now carries the fade in and out
+   of the trail, and an animation on the same property would override the transition
+   and snap instead of fading. Brightness reads the same way at this scale. */
+@keyframes dmp-emit-pulse {
+  0%, 100% { filter: blur(1.5px) brightness(1); }
+  50% { filter: blur(1.5px) brightness(1.5); } }
 /* A drag is direct manipulation: the knob, the fill and the emitter all snap to the
    pointer instead of easing, which keeps the particles born exactly at the knob. */
 .dmp-slider-dragging .dmp-slider-thumb,
@@ -862,11 +1048,17 @@ const CSS = `
   margin-left: calc(var(--dmp-thumb-size) / -2);
   margin-top: calc(var(--dmp-thumb-size) / -2);
   display: block; overflow: visible; pointer-events: none; z-index: 5;
-  /* The knob takes the panel's grey in dark and pure white in light, with a black
-     ring in both. The two values swing with the host stylesheet's own media query,
-     so no JS theme detection is involved. */
+  /* The knob is the panel's own grey, ringed in the same grey at partial opacity.
+     Three attempts landed here. Pure black read as a hole (a dark ring on a dark disc
+     on a dark panel is no shape at all). A light grey read as a foreign object — it
+     matched neither the fill nor the track. Using the PANEL's own surface colour keeps
+     the knob in the same family as everything around it, and the partial opacity does
+     the separating: the ring is legible over the pale fill and over the dark track
+     without ever becoming a hard contour.
+     The two values swing with the host stylesheet's own media query, so no JS theme
+     detection is involved. */
   --dmp-thumb-fill: var(--dsw-alias-bg-module-platform);
-  --dmp-thumb-ring: #000;
+  --dmp-thumb-ring: color-mix(in srgb, var(--dsw-alias-bg-module-platform) 45%, transparent);
   filter: drop-shadow(0 2px 4px color-mix(in srgb, var(--dsw-alias-label-primary) 28%, transparent));
   transition: left .15s ease-out, transform .12s ease; }
 .dmp-slider-rail:active .dmp-slider-thumb { transform: scale(1.06); }
@@ -932,14 +1124,14 @@ const CSS = `
 .dmp-slider-hint { margin: 5px 0 0; padding-top: 8px;
   border-top: 1px solid var(--dsw-alias-border-l1);
   font-size: 11px; line-height: 15px; color: var(--dsw-alias-label-secondary); }
-/* Light surfaces need a softer knob: a black ring reads as a hard edge on a
-   near-white panel, so the light theme pulls the ring to the host's border colour
-   and keeps the fill pure white. The two values swing with the host stylesheet's
-   own media query, so no JS theme detection is involved. */
+/* Light surfaces follow the same rule with their own panel colour: white fill, ringed
+   in that same white at partial opacity. On a near-white panel the ring still reads
+   because it sits over the blue fill for most of the travel, and where it crosses the
+   empty track the drop shadow supplies the edge instead. */
 @media (prefers-color-scheme: light) {
   .dmp-slider-thumb {
     --dmp-thumb-fill: var(--dsw-alias-bg-base);
-    --dmp-thumb-ring: var(--dsw-alias-border-l2);
+    --dmp-thumb-ring: color-mix(in srgb, var(--dsw-alias-bg-base) 55%, transparent);
   }
 }
 @media (prefers-reduced-motion: reduce) {

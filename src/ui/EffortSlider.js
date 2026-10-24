@@ -50,24 +50,129 @@ export function createEffortSlider(React) {
    * height. `dx` / `dy` / `sz` / `rot` stop the squares from marching in step, and
    * the per-particle `--i` turns one keyframe into a continuous stream (see the
    * negative `animation-delay` in the stylesheet).
+   *
+   * The entries are ordered so that taking the FIRST N of them always gives a spread
+   * across the whole cross-section: the level only ever slices this table, it never
+   * reorders it. `dy0` therefore alternates up/down rather than counting from -11 to
+   * 11, which would leave a low level emitting only from the top edge.
    */
   const EMIT = [
-    { dy0: -11, dx: -58, dy: -3, sz: 4, rot: 0 },
-    { dy0: -7, dx: -74, dy: -5, sz: 3, rot: 45 },
-    { dy0: -3, dx: -62, dy: -1, sz: 5, rot: 0 },
-    { dy0: 1, dx: -88, dy: 2, sz: 3, rot: 90 },
-    { dy0: 5, dx: -66, dy: 4, sz: 4, rot: 0 },
-    { dy0: 9, dx: -80, dy: 6, sz: 3, rot: 45 },
-    { dy0: -9, dx: -92, dy: -6, sz: 3, rot: 90 },
-    { dy0: -5, dx: -54, dy: -2, sz: 4, rot: 0 },
-    { dy0: -1, dx: -70, dy: 0, sz: 3, rot: 45 },
-    { dy0: 3, dx: -84, dy: 3, sz: 4, rot: 0 },
-    { dy0: 7, dx: -60, dy: 5, sz: 3, rot: 90 },
-    { dy0: 11, dx: -76, dy: 7, sz: 3, rot: 0 },
-    { dy0: -8, dx: -68, dy: -4, sz: 4, rot: 45 },
-    { dy0: 0, dx: -90, dy: 1, sz: 3, rot: 0 },
-    { dy0: 6, dx: -52, dy: 4, sz: 4, rot: 90 },
-    { dy0: -2, dx: -78, dy: -1, sz: 3, rot: 0 }
+    { dy0: 0, dx: -143, dy: 1, sz: 3, rot: 0 },
+    { dy0: -8, dx: -118, dy: -4, sz: 4, rot: 45 },
+    { dy0: 8, dx: -124, dy: 5, sz: 3, rot: 90 },
+    { dy0: -4, dx: -98, dy: -2, sz: 4, rot: 0 },
+    { dy0: 4, dx: -108, dy: 3, sz: 4, rot: 45 },
+    { dy0: -11, dx: -130, dy: -6, sz: 3, rot: 90 },
+    { dy0: 11, dx: -136, dy: 7, sz: 3, rot: 0 },
+    { dy0: -2, dx: -88, dy: -1, sz: 3, rot: 45 },
+    { dy0: 2, dx: -95, dy: 2, sz: 4, rot: 0 },
+    { dy0: -6, dx: -150, dy: -3, sz: 3, rot: 90 },
+    { dy0: 6, dx: -114, dy: 4, sz: 4, rot: 45 },
+    { dy0: -9, dx: -104, dy: -5, sz: 3, rot: 0 },
+    { dy0: 9, dx: -128, dy: 6, sz: 3, rot: 90 },
+    { dy0: -1, dx: -91, dy: 0, sz: 4, rot: 45 },
+    { dy0: 1, dx: -101, dy: 1, sz: 3, rot: 0 },
+    { dy0: -5, dx: -110, dy: -2, sz: 4, rot: 90 },
+    { dy0: 5, dx: -121, dy: 3, sz: 3, rot: 0 },
+    { dy0: -3, dx: -85, dy: -1, sz: 3, rot: 45 },
+    // A second pass over the same cross-section, offset in time by the per-particle
+    // delay: it doubles the density without making the stream look striped, and gives
+    // the high levels enough material to read as a real plume.
+    { dy0: -10, dx: -108, dy: -5, sz: 3, rot: 0 },
+    { dy0: 10, dx: -104, dy: 5, sz: 3, rot: 45 },
+    { dy0: -7, dx: -140, dy: -3, sz: 4, rot: 90 },
+    { dy0: 7, dx: -134, dy: 4, sz: 4, rot: 0 },
+    { dy0: -5, dx: -95, dy: -2, sz: 3, rot: 45 },
+    { dy0: 5, dx: -91, dy: 2, sz: 3, rot: 90 },
+    { dy0: -12, dx: -128, dy: -6, sz: 3, rot: 0 },
+    { dy0: 12, dx: -121, dy: 6, sz: 3, rot: 45 },
+    { dy0: -3, dx: -146, dy: -1, sz: 4, rot: 90 },
+    { dy0: 3, dx: -143, dy: 1, sz: 4, rot: 0 },
+    { dy0: -1, dx: -101, dy: 0, sz: 3, rot: 45 },
+    { dy0: 1, dx: -98, dy: 0, sz: 3, rot: 0 },
+    // A third pass. The high levels need enough material to read as a dense plume
+    // rather than a sparse spray, and because only a slice of this table is rendered
+    // the extra entries cost the low levels nothing. The timing stagger in the
+    // stylesheet spreads every pass out, so density rises without banding.
+    { dy0: -9, dx: -114, dy: -4, sz: 4, rot: 0 },
+    { dy0: 9, dx: -110, dy: 4, sz: 3, rot: 45 },
+    { dy0: -4, dx: -136, dy: -2, sz: 3, rot: 90 },
+    { dy0: 4, dx: -130, dy: 2, sz: 4, rot: 0 },
+    { dy0: -11, dx: -124, dy: -5, sz: 3, rot: 45 },
+    { dy0: 11, dx: -118, dy: 5, sz: 3, rot: 90 },
+    { dy0: -6, dx: -95, dy: -3, sz: 4, rot: 0 },
+    { dy0: 6, dx: -91, dy: 3, sz: 3, rot: 45 },
+    { dy0: -2, dx: -140, dy: -1, sz: 3, rot: 90 },
+    { dy0: 2, dx: -134, dy: 1, sz: 4, rot: 0 },
+    { dy0: -8, dx: -104, dy: -4, sz: 3, rot: 45 },
+    { dy0: 8, dx: -101, dy: 4, sz: 3, rot: 90 },
+    // A fourth pass, different seam. Each pass re-covers the same cross-section at a
+    // different spacing so the stream stays dense instead of clumping into bands; the
+    // per-particle delay in the stylesheet then interleaves all four.
+    { dy0: -10, dx: -121, dy: -5, sz: 3, rot: 0 },
+    { dy0: 10, dx: -114, dy: 5, sz: 4, rot: 45 },
+    { dy0: -5, dx: -143, dy: -2, sz: 3, rot: 90 },
+    { dy0: 5, dx: -136, dy: 2, sz: 3, rot: 0 },
+    { dy0: -12, dx: -108, dy: -6, sz: 3, rot: 45 },
+    { dy0: 12, dx: -104, dy: 6, sz: 3, rot: 90 },
+    { dy0: -7, dx: -128, dy: -3, sz: 4, rot: 0 },
+    { dy0: 7, dx: -124, dy: 3, sz: 3, rot: 45 },
+    { dy0: -1, dx: -88, dy: 0, sz: 4, rot: 90 },
+    { dy0: 1, dx: -91, dy: 0, sz: 3, rot: 0 },
+    { dy0: -9, dx: -134, dy: -4, sz: 3, rot: 45 },
+    { dy0: 9, dx: -130, dy: 4, sz: 4, rot: 90 },
+    { dy0: -4, dx: -98, dy: -2, sz: 3, rot: 0 },
+    { dy0: 4, dx: -95, dy: 2, sz: 3, rot: 45 },
+    { dy0: -11, dx: -118, dy: -5, sz: 4, rot: 90 },
+    { dy0: 11, dx: -110, dy: 5, sz: 3, rot: 0 },
+    { dy0: -3, dx: -150, dy: -1, sz: 3, rot: 45 },
+    { dy0: 3, dx: -140, dy: 1, sz: 4, rot: 90 }
+  ]
+
+  /**
+   * How much of the exhaust a level gets.
+   *
+   * The amount of work a level asks for is the one thing the control is saying, so
+   * the exhaust scales with it and the spread between the ends is deliberately wide:
+   * the lowest level emits a handful of squares barely past the knob, the highest
+   * emits the whole table and throws them roughly three times as far. A narrow range
+   * (the first version went 0.28..1.00) made every level look the same at a glance.
+   *
+   * @param index - the level's position, 0-based.
+   * @param count - how many levels the model declares.
+   * @returns `{ share, reach }`, both 0..1.
+   */
+  const exhaustFor = (index, count) => {
+    if (count <= 1) return { share: 0.5, reach: 0.5 }
+    const at = index / (count - 1)
+    // The curve is EASED rather than linear so the ends separate visually, and the
+    // floor is low enough that the lowest level is a scatter of a few squares rather
+    // than a plume. The reach tops out at 1.0 (the table's own distances) so the
+    // furthest level still lands inside the rail rather than being clipped by it.
+    const eased = at * at
+    return { share: 0.08 + eased * 0.92, reach: 0.22 + at * 0.78 }
+  }
+
+  /**
+   * The streaks left behind the squares.
+   *
+   * These read as a SHEET of parallel lines, not as a wedge: every streak is the same
+   * length and the same opacity, and they are evenly spaced down the knob's full
+   * height. An earlier version tapered them (long in the middle, short at the edges)
+   * so the silhouette converged on the knob like a flame, which is not what the bar
+   * should look like — the exhaust leaves the whole cross-section at once.
+   *
+   * The trail is reserved for the TOP level only (see `withTrail` below): it marks the
+   * ceiling of the scale, and drawing it at every level left nothing to escalate to.
+   *
+   * `off` is a PIXEL offset from the knob's centre line, not a percentage: the emitter
+   * is a zero-height box, so a percentage resolves against zero and stacks every
+   * streak on the centre. The spread covers the knob's diameter (28px) edge to edge.
+   */
+  const TRAIL = [
+    { off: -12 }, { off: -9 }, { off: -6 }, { off: -3 },
+    { off: 0 },
+    { off: 3 }, { off: 6 }, { off: 9 }, { off: 12 }
   ]
 
   return function EffortSlider({ efforts, activeId, disabled, onChange, t, caption }) {
@@ -101,6 +206,17 @@ export function createEffortSlider(React) {
 
     // A model with just one effort keeps its stop in the middle.
     const position = (at) => count <= 1 ? '50%' : `${(at / (count - 1)) * 100}%`
+
+    // The level drives the exhaust: more of the table, and thrown further.
+    const exhaust = exhaustFor(index, count)
+    /**
+     * The trail belongs to the top level only.
+     *
+     * It is the visual ceiling of the scale — the thing the last stop has that no
+     * other stop does. Drawing it at every level (the first version) made the top
+     * level feel like more of the same instead of the end of the range.
+     */
+    const withTrail = count > 1 && index === count - 1
 
     return h('div', {
       // `dmp-slider-dragging` drops the left transition on the knob, the fill and
@@ -176,9 +292,22 @@ export function createEffortSlider(React) {
            * track, so it shares the knob's coordinate space and its transition —
            * which is what keeps the spawn point under the knob while it moves.
            * The rail's clip-path trims whatever drifts past the end cap.
+           *
+           * How MANY particles exist and how FAR they travel both scale with the
+           * level: `--dmp-emit-reach` multiplies every particle's `dx` / `dy` in the
+           * stylesheet, and only the first `share` of the table is rendered at all.
+           * Keeping the unused entries out of the DOM (rather than hiding them) also
+           * means a low level runs a couple of animations instead of eighteen.
            */
-          h('span', { className: 'dmp-emit', 'aria-hidden': true },
-            EMIT.map((particle, at) => h('i', {
+          h('span', {
+            className: 'dmp-emit',
+            'aria-hidden': true,
+            // The top level is what turns the trail on; CSS cross-fades the change.
+            'data-trail': withTrail ? 'on' : 'off',
+            style: { '--dmp-emit-reach': exhaust.reach }
+          },
+          EMIT.slice(0, Math.max(2, Math.round(EMIT.length * exhaust.share)))
+            .map((particle, at) => h('i', {
               key: at,
               className: 'dmp-emit-p',
               style: {
@@ -189,6 +318,14 @@ export function createEffortSlider(React) {
                 '--sz': `${particle.sz}px`,
                 '--rot': `${particle.rot}deg`
               }
+            })),
+            // The trail is always in the DOM; `data-trail` fades it in at the top level
+            // only. Mounting it conditionally made it pop in and out as the knob
+            // crossed the last stop, which was the one abrupt moment in the control.
+            TRAIL.map((streak, at) => h('i', {
+              key: `trail-${at}`,
+              className: 'dmp-emit-trail',
+              style: { '--n': at, '--off': `${streak.off}px` }
             }))),
           h('div', { className: 'dmp-slider-dots', 'aria-hidden': true },
             efforts.map((effort, at) => h('span', {

@@ -256,31 +256,80 @@ export const CSS = `
 .dmp-emit { position: absolute; top: 50%; left: var(--dmp-effort-at);
   width: 0; height: 0; z-index: 3; pointer-events: none;
   transition: left .15s ease-out; }
-/* One square. The dy0 offset spreads the spawn points down the knob cross-section; the
-   extra dy/dx send each one its own way so they do not travel as a block. */
+/* One square. The dy0 offset spreads the spawn points down the knob cross-section;
+   the extra dy/dx send each one its own way so they do not travel as a block.
+
+   The colour is FIXED WHITE, not a theme token. The particles are meant to read as
+   light thrown off the bar, and the theme's primary label flips to near-black on a
+   light surface — which painted black specks over a pale blue fill. White is the one
+   value that works against both surfaces, so it is deliberately not themed.
+   --dmp-emit-reach (set per level) multiplies the travel: a low level throws its
+   squares a short way, a high level throws them much further. */
 .dmp-emit-p { position: absolute; left: 0; top: 0;
   width: var(--sz, 4px); height: var(--sz, 4px); border-radius: 1px;
-  background: color-mix(in srgb, var(--dsw-alias-label-primary) 92%, transparent);
-  box-shadow: 0 0 4px color-mix(in srgb,
-    var(--dmp-accent) 80%, transparent);
+  background: #fff;
+  box-shadow: 0 0 4px #fff;
   opacity: 0; transform: translate(-50%, -50%);
-  animation: dmp-emit 1.7s cubic-bezier(.25,.1,.6,1) infinite;
-  animation-delay: calc(var(--i) * -106ms); }
-/* The streak left behind the sheet of squares. */
-.dmp-emit::before { content: ''; position: absolute; right: 4px; top: 50%;
-  width: 54px; height: 8px; transform: translateY(-50%); border-radius: 6px;
+  /* Speed and rate.
+     The duration is how fast one square crosses its path; the delay is how far apart
+     consecutive squares are in time. Shortening both raises the speed AND the firing
+     rate: 1.7s / 106ms read as a lazy drift, 1.05s / 58ms reads as a jet. The delay
+     stays well under the duration on purpose — it has to, or the stream develops a
+     visible seam where one cycle hands over to the next. */
+  animation: dmp-emit 1.05s cubic-bezier(.22,.08,.62,1) infinite;
+  animation-delay: calc(var(--i) * -58ms); }
+/* The streaks left behind the sheet of squares.
+   A SHEET of parallel lines, not a wedge: all nine are the same length, the same
+   weight and the same opacity, evenly spaced across the knob's diameter. An earlier
+   version tapered them and let each drift, which made the silhouette converge on the
+   knob like a flame; the exhaust should leave the whole cross-section at once, so the
+   lines are deliberately uniform. Only the total length follows the level's reach.
+
+   The offset is a PIXEL amount around the centre, not a percentage: the emitter is a
+   zero-height box, and a percentage top resolves against that zero height, which
+   collapsed every streak onto the centre line.
+
+   The trail is ALWAYS in the DOM and fades in and out through opacity, rather than
+   being mounted only for the top level. Mounting it on the fly made it pop into
+   existence the instant the knob reached the last stop and vanish the instant it left
+   — the one jarring moment in an otherwise smooth control. Because opacity carries
+   the on/off state, the pulse animation drives filter instead, so the two never
+   fight over the same property. */
+.dmp-emit-trail { position: absolute; right: 4px; top: 50%;
+  width: calc(150px * var(--dmp-emit-reach, 1));
+  height: 2px; border-radius: 1px;
+  transform: translateY(calc(-50% + var(--off, 0px)));
   background: linear-gradient(270deg,
-    color-mix(in srgb, var(--dsw-alias-label-primary) 30%, transparent),
-    color-mix(in srgb, var(--dsw-alias-label-primary) 8%, transparent) 45%,
-    transparent);
-  filter: blur(2px); animation: dmp-emit-trail 1.7s ease-in-out infinite; }
+    #fff 0%,
+    #fff 8%,
+    color-mix(in srgb, #fff 62%, transparent) 26%,
+    color-mix(in srgb, #fff 30%, transparent) 50%,
+    color-mix(in srgb, #fff 11%, transparent) 74%,
+    transparent 100%);
+  opacity: 0;
+  transition: opacity .55s ease;
+  /* The same softness the single bar had: enough to melt the lines into one volume of
+     light at the knob, not enough to lose them as separate lines further out. */
+  filter: blur(1.5px);
+  animation: dmp-emit-pulse 1.7s ease-in-out infinite;
+  /* Staggered per streak so they shimmer out of step instead of pulsing as one band. */
+  animation-delay: calc(var(--n, 0) * -140ms); }
+/* The top level is the only one that shows the trail, but the change is a fade. */
+.dmp-emit[data-trail="on"] .dmp-emit-trail { opacity: .78; }
 @keyframes dmp-emit {
   0% { transform: translate(-50%, -50%) translate(0, var(--dy0)) scale(1); opacity: 0; }
   14% { opacity: .95; }
   70% { opacity: .5; }
   100% { transform: translate(-50%, -50%)
-    translate(var(--dx), calc(var(--dy0) + var(--dy))) scale(.2) rotate(var(--rot)); opacity: 0; } }
-@keyframes dmp-emit-trail { 0%, 100% { opacity: .3; } 50% { opacity: .75; } }
+    translate(calc(var(--dx) * var(--dmp-emit-reach, 1)),
+      calc(var(--dy0) + var(--dy) * var(--dmp-emit-reach, 1)))
+    scale(.2) rotate(var(--rot)); opacity: 0; } }
+/* The pulse drives filter, not opacity: opacity now carries the fade in and out
+   of the trail, and an animation on the same property would override the transition
+   and snap instead of fading. Brightness reads the same way at this scale. */
+@keyframes dmp-emit-pulse {
+  0%, 100% { filter: blur(1.5px) brightness(1); }
+  50% { filter: blur(1.5px) brightness(1.5); } }
 /* A drag is direct manipulation: the knob, the fill and the emitter all snap to the
    pointer instead of easing, which keeps the particles born exactly at the knob. */
 .dmp-slider-dragging .dmp-slider-thumb,
@@ -295,11 +344,17 @@ export const CSS = `
   margin-left: calc(var(--dmp-thumb-size) / -2);
   margin-top: calc(var(--dmp-thumb-size) / -2);
   display: block; overflow: visible; pointer-events: none; z-index: 5;
-  /* The knob takes the panel's grey in dark and pure white in light, with a black
-     ring in both. The two values swing with the host stylesheet's own media query,
-     so no JS theme detection is involved. */
+  /* The knob is the panel's own grey, ringed in the same grey at partial opacity.
+     Three attempts landed here. Pure black read as a hole (a dark ring on a dark disc
+     on a dark panel is no shape at all). A light grey read as a foreign object — it
+     matched neither the fill nor the track. Using the PANEL's own surface colour keeps
+     the knob in the same family as everything around it, and the partial opacity does
+     the separating: the ring is legible over the pale fill and over the dark track
+     without ever becoming a hard contour.
+     The two values swing with the host stylesheet's own media query, so no JS theme
+     detection is involved. */
   --dmp-thumb-fill: var(--dsw-alias-bg-module-platform);
-  --dmp-thumb-ring: #000;
+  --dmp-thumb-ring: color-mix(in srgb, var(--dsw-alias-bg-module-platform) 45%, transparent);
   filter: drop-shadow(0 2px 4px color-mix(in srgb, var(--dsw-alias-label-primary) 28%, transparent));
   transition: left .15s ease-out, transform .12s ease; }
 .dmp-slider-rail:active .dmp-slider-thumb { transform: scale(1.06); }
@@ -365,14 +420,14 @@ export const CSS = `
 .dmp-slider-hint { margin: 5px 0 0; padding-top: 8px;
   border-top: 1px solid var(--dsw-alias-border-l1);
   font-size: 11px; line-height: 15px; color: var(--dsw-alias-label-secondary); }
-/* Light surfaces need a softer knob: a black ring reads as a hard edge on a
-   near-white panel, so the light theme pulls the ring to the host's border colour
-   and keeps the fill pure white. The two values swing with the host stylesheet's
-   own media query, so no JS theme detection is involved. */
+/* Light surfaces follow the same rule with their own panel colour: white fill, ringed
+   in that same white at partial opacity. On a near-white panel the ring still reads
+   because it sits over the blue fill for most of the travel, and where it crosses the
+   empty track the drop shadow supplies the edge instead. */
 @media (prefers-color-scheme: light) {
   .dmp-slider-thumb {
     --dmp-thumb-fill: var(--dsw-alias-bg-base);
-    --dmp-thumb-ring: var(--dsw-alias-border-l2);
+    --dmp-thumb-ring: color-mix(in srgb, var(--dsw-alias-bg-base) 55%, transparent);
   }
 }
 @media (prefers-reduced-motion: reduce) {
