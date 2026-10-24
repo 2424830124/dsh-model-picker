@@ -24,6 +24,69 @@ const SLOT = 'conversation.input.model'
 /** The service the shipped picker exposes for per-session model directories. */
 const MODEL_DIRECTORIES = 'modelDirectories'
 /**
+ * A provider plugin's published per-model state, if that plugin is installed.
+ *
+ * Not a dependency: it is read through `scope.get()` and every consumer tolerates
+ * `undefined`. The name is scoped by its package so two plugins can never fight
+ * over a bare `state`.
+ */
+const PROVIDER_STATE = '@huai_xin/dsh-workbuddy/state'
+/**
+ * Wrap a possibly-late service in the `{ getSnapshot, subscribe }` pair the
+ * component expects.
+ *
+ * The lookup is deferred to call time rather than captured once: provider plugins
+ * are separate bundles, and load order is not something this plugin may assume.
+ * When the service is absent both members degrade to "no data" instead of
+ * throwing, which is what keeps the decoration optional.
+ *
+ * @param scope - the ctx that owns the registration.
+ * @param name - the service name to resolve on each call.
+ * @returns an observable the component can subscribe to.
+ */
+function createProviderStateSource(scope, name) {
+  /**
+   * The last non-empty snapshot seen.
+   *
+   * `getSnapshot` is asked again on every render, and the service answers with an
+   * empty map until its own (asynchronous, several-round-trip) load settles — on a
+   * fresh page that is a visible second of undecorated rows. Keeping the last real
+   * answer means a list opened a second time paints complete immediately, and the
+   * refresh that follows only updates numbers in place.
+   */
+  let cached
+  const resolve = () => {
+    try {
+      return scope.get(name)
+    } catch {
+      return undefined
+    }
+  }
+  const read = () => {
+    const snapshot = resolve()?.getSnapshot?.()
+    if (snapshot === null || snapshot === undefined) return cached
+    const providers = snapshot.providers
+    if (providers !== null && providers !== undefined && Object.keys(providers).length > 0) {
+      cached = snapshot
+      return snapshot
+    }
+    // Empty is "not loaded yet" rather than "everything logged out": a real
+    // signed-out deployment still appears, with loggedIn false.
+    return cached ?? snapshot
+  }
+  return {
+    getSnapshot: read,
+    subscribe: (listener) => resolve()?.subscribe?.(listener) ?? (() => {}),
+    // Side actions the provider publishes for a selector to offer: re-read a
+    // balance, start a sign-in. Both degrade to a resolved promise when the
+    // plugin is absent, so a caller never has to branch on its presence.
+    refresh: () => resolve()?.refresh?.() ?? Promise.resolve(),
+    renew: (region) => resolve()?.renew?.(region) ?? Promise.resolve(),
+    refreshCredits: (region) => resolve()?.refreshCredits?.(region) ?? Promise.resolve(),
+    login: (region) => resolve()?.login?.(region) ?? Promise.resolve()
+  }
+}
+/**
  * BELOW the shipped occupant's `priority: 0`.
  *
  * For a `single` slot the LOWEST priority renders — the registry says so in its
@@ -217,6 +280,13 @@ window.__ModuleLoader__.load({
                   localeId,
                   localeSource,
                   available,
+                  // Optional provider-published state (login, credits, per-model
+                  // availability/busy/rate). Late-bound: the providing bundle may
+                  // apply before or after this one, and it must never be listed in
+                  // `inject` — a service that never appears would then keep this
+                  // seat from registering at all. Absent ⇒ rows render as plain
+                  // text, which is the supported fallback.
+                  modelStateSource: createProviderStateSource(scope, PROVIDER_STATE),
                   // The shipped registration hands over the STORE, not the
                   // controller; the component subscribes to it directly.
                   directory: directory.store,

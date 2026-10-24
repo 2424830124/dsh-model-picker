@@ -384,10 +384,10 @@ export function createEffortSlider(React) {
           },
           h('circle', {
             // Outer edge = r + stroke/2 = 13.25 + 0.75 = 14 units, and the 28-unit
-            // box is drawn at 32px — so the disc's radius is exactly 16px, the same
-            // as the rail's end cap. Smaller and the blue cap peeks out as a thin
-            // rim around the knob at the first stop; larger and the knob spills
-            // past the pill.
+            // box is drawn at 28px (--dmp-thumb-size) — so the disc's radius is
+            // exactly 14px, matching the rail's half-height of 14px. Smaller and
+            // the blue cap peeks out as a thin rim around the knob at the first
+            // stop; larger and the knob spills past the pill.
             cx: 14,
             cy: 14,
             r: 13.25,

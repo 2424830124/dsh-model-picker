@@ -1,4 +1,29 @@
 /**
+ * The nearest ancestor that scrolls vertically.
+ *
+ * The popover is rendered inside the conversation's scroll container. Anything
+ * that pokes past that container's right edge becomes horizontal overflow, and
+ * because the container declares overflow-y: auto the other axis computes to
+ * auto as well — the browser then paints a horizontal scrollbar, the container
+ * loses exactly that much height, and the whole chat jumps upward for a frame.
+ * Clamping to the container keeps the panel inside it.
+ *
+ * @param node - the trigger element.
+ * @returns the scrolling ancestor, or `null` when there is none.
+ */
+function scrollParentOf(node) {
+  if (node === null || node === undefined || typeof getComputedStyle !== 'function') return null
+  let current = node.parentElement
+  while (current !== null && current !== undefined) {
+    const overflow = getComputedStyle(current).overflowY
+    if ((overflow === 'auto' || overflow === 'scroll' || overflow === 'overlay')
+      && current.clientHeight > 0) return current
+    current = current.parentElement
+  }
+  return null
+}
+
+/**
  * Anchor a popover to the centre of its trigger, clamped to the viewport.
  *
  * Both popovers in this picker open ABOVE their button, and both are wider than
@@ -20,16 +45,33 @@
  * @returns `{ ref, panelRef, style }`.
  */
 export function createAnchoredPanel(React, options) {
-  const { useState, useEffect, useRef } = React
+  const { useState, useEffect, useLayoutEffect, useRef } = React
   const { open, fallbackWidth = 280, margin = 8, deps = [] } = options
 
-  const [anchor, setAnchor] = useState({ offset: 0, ready: false })
+  /**
+   * Park the panel OFF-SCREEN LEFT until it has been measured.
+   *
+   * It used to start at `left: 0`, and the very first frame — before the effect
+   * had measured anything — was already inside the conversation's scroll
+   * container and poking out of its right edge. That frame is enough for the
+   * browser to add a horizontal scrollbar, which steals height from the scroll
+   * container and lifts the whole chat for a moment; the next frame moves the
+   * panel back and the scrollbar disappears. Users read that as "the panel makes
+   * the chat jump". Negative overflow is clipped and never scrollable, so a panel
+   * parked on the left cannot produce a scrollbar at all.
+   */
+  const PARKED = -9999
+  const [anchor, setAnchor] = useState({ left: PARKED, ready: false })
   const triggerRef = useRef(null)
   const panelRef = useRef(null)
 
-  useEffect(() => {
+  // Layout effect where available: measure BEFORE the frame is painted, so the
+  // panel is never seen (nor measured by the scroll container) at the parked spot.
+  const useCommitEffect = typeof useLayoutEffect === 'function' ? useLayoutEffect : useEffect
+
+  useCommitEffect(() => {
     if (!open) {
-      setAnchor({ offset: 0, ready: false })
+      setAnchor({ left: PARKED, ready: false })
       return undefined
     }
     const measure = () => {
@@ -55,9 +97,28 @@ export function createAnchoredPanel(React, options) {
 
       const centre = rect.left + rect.width / 2
       const centred = centre - width / 2
-      const maxLeft = viewport - width - margin
-      const clamped = Math.max(margin, Math.min(centred, Math.max(margin, maxLeft)))
-      setAnchor({ offset: clamped - centred, ready: true })
+      // Stay inside the scrolling ancestor as well as the viewport: overflowing
+      // it costs a horizontal scrollbar, and that scrollbar is what made the
+      // chat jump when a panel opened.
+      const scroller = scrollParentOf(trigger)
+      const bounds = scroller !== null && typeof scroller.getBoundingClientRect === 'function'
+        ? scroller.getBoundingClientRect()
+        : null
+      const floor = Math.max(margin, bounds === null ? margin : bounds.left + margin)
+      const ceiling = Math.min(viewport - width - margin,
+        bounds === null ? viewport - width - margin : bounds.right - width - margin)
+      const clamped = Math.max(floor, Math.min(centred, Math.max(floor, ceiling)))
+      // Anchor in PIXELS from the panel's containing block, not with `left: 50%`.
+      // The containing block is the control row, whose width follows the label on
+      // the buttons: a percentage anchor slid the panel sideways whenever that
+      // label changed (a model switch, a level name), which reads as a flicker
+      // even though nothing re-rendered. Measuring once per open keeps it still.
+      const parent = panel !== null && panel !== undefined ? panel.offsetParent : null
+      const origin = parent !== null && parent !== undefined
+        && typeof parent.getBoundingClientRect === 'function'
+        ? parent.getBoundingClientRect().left
+        : rect.left
+      setAnchor({ left: Math.round(clamped - origin), ready: true })
     }
 
     measure()
@@ -83,9 +144,8 @@ export function createAnchoredPanel(React, options) {
     ref: triggerRef,
     panelRef,
     style: {
-      left: '50%',
+      left: `${anchor.left}px`,
       right: 'auto',
-      transform: `translateX(calc(-50% + ${anchor.offset}px))`,
       visibility: anchor.ready ? 'visible' : 'hidden'
     }
   }

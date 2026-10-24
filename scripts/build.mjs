@@ -14,8 +14,8 @@
  *   1. Read the entry module and every local `./x.js` import it reaches,
  *      depth first, in dependency order.
  *   2. Strip the `import`/`export` syntax the bundle does not need (the whole
- *      tree shares one function scope inside the loader factory).
- *   3. Emit them in that order, then the entry's own body.
+ *      tree is concatenated into one IIFE, so it shares a single scope).
+ *   3. Emit them in that order, wrapped in one IIFE, then the entry's body.
  *   4. Refuse to ship a file with a BOM, or a stylesheet template whose comments,
  *      backticks, or braces would make rules silently disappear at runtime.
  *
@@ -253,8 +253,28 @@ const header = `/**
  * Source of truth: the modules under src/. Rebuild with \`node scripts/build.mjs\`.
  * This bundle is what the Client module loader serves; it is the only browser
  * entry the loader knows about for this package.
+ *
+ * The modules below are wrapped in one IIFE. The loader executes this file as a
+ * CLASSIC script, so without the wrapper every top-level binding would land in
+ * the page's global lexical scope: another plugin bundle declaring the same
+ * name would fail to parse, and executing this bundle twice in one page would
+ * throw "Identifier '…' has already been declared" before a single line ran.
+ * The wrapper keeps that scope private. It does not make a second execution
+ * harmless — the loader already rejects a duplicate \`load()\` for the same id —
+ * it just confines the damage to this bundle.
  */
 `
+
+/**
+ * Concatenate the modules behind one private scope.
+ *
+ * `factory(require)` receives only the entry OBJECT, so the module bodies are
+ * not inside a function today: they sit at the top level of the script, where a
+ * classic script's bindings are global. That is what made a re-execution of an
+ * otherwise perfect bundle a SyntaxError instead of a no-op.
+ */
+const WRAP_OPEN = '(() => {\n'
+const WRAP_CLOSE = '})()\n'
 
 /**
  * Refuse to leave a BOM in any file the package ships.
@@ -299,7 +319,7 @@ for (const { file, source } of order) {
  * while it is being replaced. `rename` on the same volume is atomic, so a reader
  * sees either the old file or the new one and never a half-written mix.
  */
-const text = `${header}${body}\n`
+const text = `${header}${WRAP_OPEN}${body}\n${WRAP_CLOSE}`
 
 // Line ranges of each module inside the assembled text, so a duplicate-declaration
 // error can name both the module and the line rather than a bundle offset.

@@ -12,18 +12,44 @@
  * instead of a dialog dropped on top of it.
  */
 export const CSS = `
-.dmp-root { position: relative; display: flex; align-items: center; gap: 6px; min-width: 0; }
+/* The accent, shared by everything that marks "current" or "active": the selected
+   model row, the slider's fill and active label, and the two tier tags.
+ *
+ * The alias token is one step too pale on a dark panel: in the dark theme
+ * --dsw-alias-state-business-primary resolves to the deepseek-400 step, which reads
+ * as washed out against the panel surface. The ramp's next step down, deepseek-450,
+ * is the same hue with the weight the bar needs. The alias token stays as the
+ * fallback so a future ramp change still lands on something.
+ *
+ * It is deliberately the STATIC ramp step and not a theme alias: light and dark
+ * then resolve to the same blue, which is what keeps the selected model the same
+ * colour in both themes instead of following the label colour to near-white.
+ * The preview pages carry these same values, which is why a preview can look right
+ * while the app looks pale — the demo used to hard-code a blue of its own. */
+.dmp-root { --dmp-accent: var(--dsw-static-deepseek-450,
+    var(--dsw-alias-state-business-primary, var(--dsw-alias-brand-primary)));
+  position: relative; display: flex; align-items: center; gap: 6px; min-width: 0; }
 /* One popover anchor per control: the model list and the level list open above
    their own button and never overlap each other. */
 .dmp-control { position: relative; display: flex; align-items: center; min-width: 0; }
 /* The model tag keeps a stable box too, for the same reason: switching models must
    not move the level tag beside it. It is capped rather than fixed so a long model
    name still gets room, but the cap is what the layout reserves. */
-.dmp-trigger { display: flex; align-items: center; gap: 4px; min-width: 0;
-  max-width: min(220px, 34cqw); height: 28px; padding: 0 4px 0 8px; border: 0;
+/* FIXED width, not content-sized.
+ *
+ * A content-sized button meant the whole control row changed width with every
+ * model name, and the panel is anchored inside that row — so switching to a
+ * shorter name slid the open list sideways under the pointer. The box is fixed
+ * and the label truncates instead; the row, and therefore the panel, never move.
+ * The container query unit keeps it from eating a narrow composer. */
+.dmp-trigger { display: flex; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0;
+  width: min(160px, 34cqw); box-sizing: border-box; flex: none;
+  height: 28px; padding: 0 2px 0 6px; border: 0;
   border-radius: var(--dsw-radius-sm, 6px); cursor: pointer;
   background: transparent; color: var(--dsw-alias-label-secondary);
-  font: inherit; font-size: 13px; line-height: 20px; }
+  /* The same type as the panel it opens: the trigger is the panel's title, so a
+     different size made the list look like it belonged to another control. */
+  font: inherit; font-size: 12.5px; font-weight: 600; line-height: 20px; }
 /* The level tag has a FIXED width.
    Level names differ in length ("Low" vs "X-High"), so a content-sized tag made
    the whole composer row shift every time the level changed — and pushed the
@@ -43,9 +69,12 @@ export const CSS = `
    also stops a long label from running underneath it.
    The caret keeps its transform free for the open-state rotation by centring
    with margin-top instead of translateY. */
-.dmp-trigger-effort { position: relative; width: 92px; box-sizing: border-box;
-  padding: 0 18px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
-.dmp-trigger-effort > .dmp-chevron { position: absolute; right: 4px; top: 50%;
+.dmp-trigger-effort { position: relative; width: 80px; box-sizing: border-box;
+  padding: 0 18px 0 12px; font-size: 12px; font-weight: 600;
+  color: var(--dsw-alias-label-secondary); }
+/* The caret sits flush against the right edge and the label box is padded away
+   from it, so the two read as separate elements instead of touching. */
+.dmp-trigger-effort > .dmp-chevron { position: absolute; right: 0; top: 50%;
   margin-top: -7px; }
 /* The tag names the level; it is not a brightness meter. Taking the ramp colour here
    made "Low" render dim grey and "High" near white, so the control appeared to change
@@ -55,7 +84,11 @@ export const CSS = `
    itself takes the tier accent, so the button in the composer row carries the same
    colour as the bar inside the panel it opens. */
 .dmp-trigger-effort-text { flex: 1 1 auto; min-width: 0; text-align: center;
-  color: var(--dsw-alias-label-primary); font-weight: 600; }
+  color: var(--dsw-alias-label-primary); font-weight: 600;
+  /* Declared on the BASE rule, not on the tier rule below: a transition only runs if
+     the element has one in the state it ends up in. Putting it on the tier selector
+     would fade INTO the accent but snap back to plain when the level leaves the tier. */
+  transition: color .34s ease; }
 .dmp-trigger-effort[data-tier="top"] .dmp-trigger-effort-text,
 .dmp-trigger-effort[data-tier="high"] .dmp-trigger-effort-text {
   color: var(--dmp-accent); }
@@ -74,7 +107,10 @@ export const CSS = `
 .dmp-trigger:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.12)); }
 .dmp-trigger:disabled { color: var(--dsw-alias-label-dimmed, var(--dsw-alias-state-idle-primary)); cursor: default; }
 .dmp-trigger-text { display: var(--dsh-composer-model-text-display, block);
-  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* The label hugs the chevron at the right edge of the fixed box; the slack sits
+     on the left, so the name and the arrow read as one unit. */
+  text-align: right; }
 .dmp-chevron { flex: none; color: var(--dsw-alias-label-caption, var(--dsw-alias-label-secondary));
   transition: transform .12s; }
 .dmp-chevron-open { transform: rotate(180deg); }
@@ -82,7 +118,7 @@ export const CSS = `
    twenty-model one. The caps only exist so a long model name cannot run off the
    viewport. */
 .dmp-panel { position: absolute; bottom: calc(100% + 6px + var(--dmp-notice-lift, 0px)); z-index: 1000;
-  width: max-content; min-width: min(240px, 100vw - 32px); max-width: min(360px, 92vw);
+  width: max-content; min-width: min(300px, 100vw - 32px); max-width: min(420px, 92vw);
   max-height: min(320px, 60vh); display: flex; flex-direction: column; padding: 4px;
   border: 1px solid var(--dsw-alias-border-l1); border-radius: var(--dsw-radius-lg, 10px);
   background: var(--dsw-alias-bg-module-platform, var(--dsw-alias-bg-layer-1));
@@ -107,15 +143,164 @@ export const CSS = `
 .dmp-list { flex: 1; overflow-y: auto; min-height: 0;
   --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
   --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2); }
-.dmp-group { padding: 6px 7px 2px; font-size: 11px; letter-spacing: .04em;
+/* One card per provider.
+ *
+ * The card edge — not a caption line — is what separates providers. With two
+ * providers exposing the same model names (the official catalogue does exactly
+ * that: DeepSeek and DeepSeek Account), a flat list of rows with a small grey
+ * caption in between reads as one continuous column and the eye loses the
+ * boundary. The surface comes from the layer token so it reads as a panel
+ * *inside* the panel, and the header keeps the provider name for one-model
+ * groups, where the card alone would carry no label.
+ *
+ * Cards stack instead of using a flex gap: the list box is the scroll
+ * container and must stay a plain block, so its scroll height is the sum of
+ * the cards. */
+.dmp-card { border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-lg, 10px);
+  background: var(--dsw-alias-bg-layer-1); overflow: hidden; }
+.dmp-card + .dmp-card { margin-top: 6px; }
+/* The header is the fold control. It is a button unless a search is running, in
+ * which case the component renders the same box as a plain div — hence the
+ * button-only cursor/hover rules instead of one shared hover. */
+.dmp-card-head { display: flex; align-items: center; gap: 6px;
+  width: 100%; box-sizing: border-box; padding: 7px 9px 3px;
+  border: 0; background: transparent; text-align: left; font: inherit;
+  font-size: 11px; letter-spacing: .04em;
   color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary)); }
-.dmp-item { display: flex; align-items: center; width: 100%; box-sizing: border-box;
+/* The fold area is its own button inside the row, so a second action (renew) can
+   sit beside it without nesting one button in another. */
+.dmp-card-head-toggle { display: flex; flex: 1 1 auto; align-items: center; gap: 6px;
+  min-width: 0; padding: 0; border: 0; background: transparent; text-align: left;
+  font: inherit; font-size: inherit; letter-spacing: inherit; color: inherit; }
+button.dmp-card-head-toggle { cursor: pointer; }
+button.dmp-card-head-toggle:hover { color: var(--dsw-alias-label-secondary); }
+button.dmp-card-head-toggle:focus-visible { outline: 2px solid var(--dsw-alias-border-l2);
+  outline-offset: -2px; }
+/* The chevron repeats the fold action; it is decorative for assistive tech. */
+.dmp-card-chevron { display: inline-flex; flex: none; align-items: center; justify-content: center;
+  padding: 0; border: 0; background: transparent; color: inherit; }
+button.dmp-card-chevron { cursor: pointer; }
+button.dmp-card-chevron:hover { color: var(--dsw-alias-label-secondary); }
+/* A quiet pill, not a filled button: renewing is upkeep, not the point of the row. */
+.dmp-card-renew { flex: none; padding: 0 7px; border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 4px; background: transparent; cursor: pointer; font: inherit;
+  font-size: 10px; letter-spacing: .02em; color: var(--dsw-alias-label-tertiary,
+    var(--dsw-alias-label-secondary)); }
+.dmp-card-renew:hover:not(:disabled) { color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-border-l3, var(--dsw-alias-border-l2)); }
+.dmp-card-renew:disabled { opacity: .6; cursor: default; }
+.dmp-card-head-text { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.dmp-card-head .dmp-chevron { flex: none; width: 12px; height: 12px; }
+/* A folded card has no body, so the header supplies the bottom padding too. */
+.dmp-card-folded .dmp-card-head { padding-bottom: 7px; }
+/* A card whose provider plugin has its own identity colour. A third deliberate
+ * literal, beside the pure black/white and the two tier hues: this teal IS that
+ * plugin's accent, and no theme token resolves to it. Scoped to the attribute, so
+ * every other provider keeps the shared accent. */
+.dmp-card[data-accent="workbuddy"] { --dmp-accent: #12bfa0; }
+/* The items sit inset from the card edge so their hover pill never touches the
+ * border; the bottom padding closes the card under the last row. */
+.dmp-card-body { padding: 0 3px 3px; }
+/* A card can hold several providers when one plugin registers them under a single
+ * package (two deployments of one product). Each gets a small label; the shared
+ * title already said the rest. */
+/* A card can hold several providers when one plugin registers them under a single
+ * package. They are TABS, not stacked sections: the provider panel does the same,
+ * and stacking two near-identical model lists doubles the height for a difference
+ * nobody reads twice. The active tab is underlined with the shared accent. */
+/* Two columns, one per deployment. Each column is a tab label, the account line
+ * under it, and the accent underline spanning the column — the shape the provider
+ * panel uses, so a plate of "大陆版 / 海外版" reads the same in both places. */
+.dmp-card-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 112px));
+  justify-content: center; gap: 10px; padding: 2px 10px 0;
+  margin-bottom: 2px; border-bottom: 1px solid var(--dsw-alias-border-l1); }
+.dmp-card-tabcol { position: relative; display: flex; flex-direction: column;
+  align-items: center; gap: 2px; padding-bottom: 6px; }
+.dmp-card-tabcol-active::after { content: ''; position: absolute; left: 0; right: 0; bottom: -1px;
+  height: 2px; border-radius: 1px;
+  background: var(--dmp-accent,
+    var(--dsw-static-deepseek-450, var(--dsw-alias-state-business-primary))); }
+.dmp-card-tab { width: 100%; padding: 3px 0 2px; border: 0; background: transparent;
+  text-align: center; font: inherit; font-size: 13px; letter-spacing: .02em; cursor: pointer;
+  color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary)); }
+.dmp-card-tab:focus-visible { outline: 2px solid var(--dsw-alias-border-l2); outline-offset: -2px; }
+.dmp-card-tabcol-active .dmp-card-tab { color: var(--dsw-alias-label-primary); font-weight: 600; }
+/* The account line: balance plus a refresh, or a sign-in button. */
+.dmp-card-account { display: flex; align-items: center; gap: 5px; min-height: 16px;
+  font-size: 10.5px; font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary)); }
+/* A filled chip in the card's accent, like the provider panel's own sign-in
+   button: it is the one thing on this header that asks to be pressed. */
+.dmp-card-login { padding: 1px 10px; border: 0; border-radius: 4px; cursor: pointer;
+  font: inherit; font-size: 10.5px; font-weight: 600; color: #fff;
+  background: var(--dmp-accent,
+    var(--dsw-static-deepseek-450, var(--dsw-alias-state-business-primary))); }
+.dmp-card-login:hover:not(:disabled) { filter: brightness(1.08); }
+.dmp-card-login:disabled { opacity: .6; cursor: default; }
+.dmp-card-refresh { display: inline-flex; align-items: center; justify-content: center;
+  padding: 1px; border: 0; border-radius: 4px; background: transparent; cursor: pointer;
+  color: inherit; }
+.dmp-card-refresh:hover:not(:disabled) { color: var(--dsw-alias-label-primary); }
+.dmp-card-refresh:disabled { cursor: default; }
+/* Turning while the request is out: the same motion the panel's own refresh uses. */
+.dmp-refresh-spinning { animation: dmp-spin .9s linear infinite; }
+@keyframes dmp-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.dmp-card-section + .dmp-card-section { margin-top: 2px; }
+/* Only while searching: the tabs are gone, so the caption names the deployment. */
+.dmp-card-section-label { padding: 4px 7px 1px; font-size: 10.5px; letter-spacing: .06em;
+  color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary)); }
+.dmp-item { display: flex; align-items: center; gap: 6px; width: 100%; box-sizing: border-box;
   min-height: 34px; padding: 5px 7px; border: 0; border-radius: var(--dsw-radius-md, 8px);
   background: transparent; cursor: pointer; text-align: left;
   color: var(--dsw-alias-label-primary); font: inherit; font-size: 12.5px; }
 .dmp-item:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.12)); }
-.dmp-item-current { color: var(--dsw-alias-brand-primary); font-weight: 600; }
-.dmp-item-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The selected model keeps one colour in both themes: the accent is the static
+   ramp step, not a theme alias (see --dmp-accent above). The fallback repeats the
+   chain so the row still reads as selected if the variable is ever missing — the
+   accent is declared on .dmp-root, and a panel rendered outside it would otherwise
+   fall back to plain label text and lose the only colour cue. */
+.dmp-item-current { color: var(--dmp-accent,
+    var(--dsw-static-deepseek-450, var(--dsw-alias-state-business-primary)));
+  font-weight: 600; }
+.dmp-item-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+/* Row decoration from a provider plugin's published state, in that panel's own
+ * tag vocabulary: a small load dot, a pill for a verdict, mono text for a price.
+ * Colours are theme tokens, never literals — the panel's own greens/ambers are
+ * hard-coded, which is fine there and not fine in a token-only stylesheet. */
+.dmp-item-dot { flex: none; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--dsw-alias-state-idle-primary); }
+.dmp-item-dot[data-tone="idle"] { background: var(--dsw-alias-state-success-primary); }
+.dmp-item-dot[data-tone="busy"] { background: var(--dsw-alias-state-warn-primary); }
+.dmp-item-dot[data-tone="congested"] { background: var(--dsw-alias-state-error-primary); }
+.dmp-item-dot[data-tone="unknown"] { background: var(--dsw-alias-state-idle-primary); }
+.dmp-item-tail { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; font-size: 11px; line-height: 17px; font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-secondary); }
+.dmp-item-tail-rate { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+/* Nothing published yet: the slot keeps its width and says "unknown" instead of
+   being absent, so the row does not grow a chip a second after it appears. */
+.dmp-item-tail-pending { color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary)); }
+.dmp-card-credits-pending { color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary)); }
+/* A deployment that publishes no models yet — signed out, or signed in while the
+   catalogue catches up. Says so instead of leaving a blank body. */
+.dmp-card-empty { padding: 6px 7px 8px; font-size: 12px;
+  color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary)); }
+/* A one-deployment card has no tab strip; the account line sits under the header. */
+.dmp-card-account-solo { padding: 0 8px 4px; }
+/* The pill: tinted from its own text colour, so one rule covers idle, warn and
+ * bad without three hand-picked backgrounds. */
+.dmp-item-tail-pill { padding: 0 7px; border-radius: 999px; font-weight: 500;
+  background: color-mix(in srgb, currentColor 14%, transparent); }
+.dmp-item-tail-accent { color: var(--dmp-accent,
+    var(--dsw-static-deepseek-450, var(--dsw-alias-state-business-primary))); }
+.dmp-item-tail-bad { color: var(--dsw-alias-state-error-primary); }
+.dmp-item-tail-warn { color: var(--dsw-alias-state-warn-primary); }
+.dmp-item-tail-muted { color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary)); }
+/* A selected row already carries the accent on its name; the tail keeps its own
+ * tone so "selected but rate limited" still reads as rate limited. */
 .dmp-note { padding: 8px 7px; font-size: 12px; line-height: 18px;
   color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary)); }
 .dmp-note-error { color: var(--dsw-alias-state-error-primary); }
@@ -156,8 +341,8 @@ export const CSS = `
   letter-spacing: .01em; white-space: nowrap; }
 /* The value pill is sized close to the heading beside it, so the two read as one
    line: the earlier 19px box with 11.5px type made the current level look like a
-   footnote next to the title. 26px / 14px keeps the pair balanced and still fits
-   a long level name. */
+   footnote next to the title. 22px / 12px keeps the pair balanced against the
+   16px heading and still fits a long level name. */
 .dmp-slider-value { margin-left: auto; display: inline-flex; align-items: center;
   height: 22px; box-sizing: border-box; padding: 0 8px; border-radius: 8px;
   font-size: 12px; line-height: 1; font-weight: 600; white-space: nowrap;
@@ -167,7 +352,10 @@ export const CSS = `
      right corner too, which is what ties the label to the bar below it. Without a tier
      the colour is the plain primary label. */
   color: var(--dsw-alias-label-primary);
-  background: var(--dsw-alias-interactive-bg-hover); }
+  background: var(--dsw-alias-interactive-bg-hover);
+  /* On the base rule for the same reason as the trigger text: the fade has to work in
+     both directions, including the return to the plain label colour. */
+  transition: color .34s ease; }
 .dmp-slider[data-tier="top"] .dmp-slider-value,
 .dmp-slider[data-tier="high"] .dmp-slider-value { color: var(--dmp-accent); }
 /* Reasoning effort: the slider.
@@ -193,16 +381,6 @@ export const CSS = `
    than four copies of the same value. */
 .dmp-slider { --dmp-rail-height: 28px; --dmp-thumb-size: 28px;
   --dmp-stop-left: 28px; --dmp-stop-right: 16px; }
-/* The accent.
-   The alias token is one step too pale on a dark panel: in the dark theme
-   --dsw-alias-state-business-primary resolves to the deepseek-400 step, which reads
-   as washed out against the panel surface. The ramp's next step down, deepseek-450,
-   is the same hue with the weight the bar needs. The alias token stays as the
-   fallback so a future ramp change still lands on something.
-   The preview pages carry these same values, which is why a preview can look right
-   while the app looks pale — the demo used to hard-code a blue of its own. */
-.dmp-slider { --dmp-accent: var(--dsw-static-deepseek-450,
-    var(--dsw-alias-state-business-primary, var(--dsw-alias-brand-primary))); }
 /* The two top levels get their own accent.
    Borrowed from Codex's TUI, which reserves colour for its highest tiers rather than
    painting a ramp across every stop: its Ultra is a violet family and its Max is an
@@ -226,10 +404,10 @@ export const CSS = `
    user-tuned value.
    The two numbers are tied: change the height, move the radius with it.
 
-   clip-path does the actual shaping. A border-radius of 16px on this 32px box was
+   clip-path does the actual shaping. A border-radius of 16px on a 32px box was
    measured painting an ~10px corner in the host, so the ends kept reading as a
-   rounded rectangle no matter what the declaration said. clip-path: inset(... round
-   17px) is a different property: it clips the element AND its children to the same
+   rounded rectangle no matter what the declaration said. clip-path: inset(0 round
+   15px) is a different property: it clips the element AND its children to the same
    shape, so neither the track nor the fill can be squared off by whatever was
    winning on border-radius. border-radius stays as the fallback. */
 .dmp-slider-rail { position: relative; height: var(--dmp-rail-height);
@@ -260,7 +438,12 @@ export const CSS = `
   left: calc(var(--dmp-stop-left) * -1);
   width: calc(var(--dmp-effort-at) + var(--dmp-stop-left));
   background: var(--dmp-accent);
-  z-index: 1; transition: width .15s ease-out; pointer-events: none; }
+  /* Two different clocks on purpose. The WIDTH follows the knob at 150ms so the fill
+     stays glued to it; the COLOUR gets its own slower curve, because the accent only
+     changes when the knob crosses into the top two levels and a snap there read as a
+     glitch rather than a state change. */
+  z-index: 1; transition: width .15s ease-out, background-color .34s ease;
+  pointer-events: none; }
 .dmp-slider-dots { position: absolute; top: 0; bottom: 0; left: 0; right: 0;
   pointer-events: none; z-index: 2; }
 /* Stops stay SMALL and GREY, and they are only visible AHEAD of the knob: the blue
@@ -357,10 +540,15 @@ export const CSS = `
   0%, 100% { filter: blur(1.5px) brightness(1); }
   50% { filter: blur(1.5px) brightness(1.5); } }
 /* A drag is direct manipulation: the knob, the fill and the emitter all snap to the
-   pointer instead of easing, which keeps the particles born exactly at the knob. */
-.dmp-slider-dragging .dmp-slider-thumb,
-.dmp-slider-dragging .dmp-slider-fill,
-.dmp-slider-dragging .dmp-emit { transition: none; }
+   pointer instead of easing, which keeps the particles born exactly at the knob.
+
+   The colour transitions are deliberately NOT cancelled here. Dragging across the two
+   tier stops changes the accent MID-gesture, and killing every transition on the fill
+   would make that the one moment the colour jumps — which is exactly when the user is
+   looking at it. Only the geometric properties snap. */
+.dmp-slider-dragging .dmp-slider-thumb { transition: none; }
+.dmp-slider-dragging .dmp-slider-fill { transition: width 0s, background-color .34s ease; }
+.dmp-slider-dragging .dmp-emit { transition: left 0s; }
 /* The knob fills the rail's height and is drawn as an SVG, so no inherited
    border-radius, padding or box-sizing rule can square it off. Its size comes from
    --dmp-thumb-size; the stop offsets and the input's travel are derived from the
@@ -419,12 +607,18 @@ export const CSS = `
   /* One brightness for every unselected label: the tertiary token sat too close to
      the panel background, so the secondary token lifts all of them equally. */
   color: var(--dsw-alias-label-secondary);
-  /* 12px, up from 11px: at 11 the stop names sat visibly below the heading's weight
-     and were hard to hit by eye under a 32px rail. */
+  /* 11px keeps every stop name on one line under the 28px rail without crowding
+     the heading above it; the labels sit below the track, so they can go smaller
+     than the panel's body copy. */
   font-size: 11px; line-height: 15px;
   font-family: Montserrat, var(--dsw-font-family-sans, system-ui, sans-serif);
   white-space: nowrap; cursor: pointer;
-  max-width: 45%; overflow: hidden; text-overflow: ellipsis; }
+  max-width: 45%; overflow: hidden; text-overflow: ellipsis;
+  /* The colour fade lives HERE, on the base rule, so the label that loses the active
+     class fades out as well as the one that gains it — the highlight hands over with a
+     cross-fade instead of blinking. Hover still answers quickly through the faster
+     background transition. */
+  transition: color .3s ease, background-color .15s ease; }
 /* Every label is centred on its stop.
    The two end labels used to be re-anchored instead (no transform at the start, a full
    translate at the end) so their text could not overflow the legend. That kept them
@@ -441,7 +635,8 @@ export const CSS = `
 /* The active label is marked by COLOUR only, not weight.
    Bolding it made the selected label measurably wider and taller-looking than its
    neighbours, so the labels appeared to change size as the level moved. Keeping one
-   weight keeps every label the same box; the accent colour carries the selection. */
+   weight keeps every label the same box; the accent colour carries the selection.
+   The cross-fade comes from the transition on the base rule above. */
 .dmp-slider-tick-active { color: var(--dmp-accent); }
 .dmp-slider-hint { margin: 5px 0 0; padding-top: 8px;
   border-top: 1px solid var(--dsw-alias-border-l1);
@@ -457,7 +652,11 @@ export const CSS = `
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .dmp-slider-fill, .dmp-slider-thumb { transition: none; }
+  /* Every accent transition goes too, not just the geometry: a colour cross-fade is
+     still motion, and the tier change is perfectly legible without it. */
+  .dmp-slider-fill, .dmp-slider-thumb,
+  .dmp-slider-tick, .dmp-slider-value,
+  .dmp-trigger-effort-text { transition: none; }
   /* The exhaust is decoration: with motion turned down it is simply not drawn. */
   .dmp-emit { display: none; }
 }

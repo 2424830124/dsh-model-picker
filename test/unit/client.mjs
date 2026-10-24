@@ -6,8 +6,9 @@
  * service. The contract to verify is therefore narrow and specific:
  *
  *  - it registers the composer seat BELOW the shipped priority (lowest renders),
- *  - it declares the `conversation.input.model.label` child so provider
- *    decorations keep working,
+ *  - it does NOT declare the `conversation.input.model.label` child: that child
+ *    is already declared by the shipped occupant, and a second declaration
+ *    throws, which takes the whole picker down,
  *  - it hands its component the SAME props bundle the shipped registration does,
  *  - it never registers a second directory service of its own,
  *  - the component renders from that bundle and submits selections through it.
@@ -19,6 +20,7 @@
 
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import vm from 'node:vm'
 
 const root = new URL('../../', import.meta.url)
 
@@ -77,6 +79,48 @@ const pkg = JSON.parse(readFileSync(new URL('package.json', root), 'utf8'))
     assert.ok(statSync(source).mtimeMs <= bundleTime + 1,
       `${name} is newer than client.js — rebuild the bundle`)
   }
+}
+
+// ---------------------------------------------------------------------------
+// The bundle must be safe to execute as a CLASSIC script, twice in one page.
+// ---------------------------------------------------------------------------
+// The loader serves client.js as a classic script, so every top-level binding is
+// a page-global lexical binding. Two failures follow from that, and neither is
+// visible through the `import()` below — ESM gives the file module scope and
+// caches the URL, which hides both:
+//
+//  - a second plugin bundle declaring one of these names would fail to parse,
+//  - executing this bundle twice in one page throws
+//    `Identifier '…' has already been declared` before any of it runs.
+//
+// The generated wrapper (`(() => { … })()`) keeps the scope private, so a second
+// execution parses. It is NOT a no-op: the loader still rejects a duplicate
+// `load()` for the same id — deliberately, see its own message, "bundle executed
+// twice without invalidate?" — so this checks the PARSE, not registration.
+{
+  const bundle = readFileSync(new URL('client.js', root), 'utf8')
+  let registrations = 0
+  const sandbox = {
+    window: {
+      __ModuleLoader__: { load: () => { registrations += 1 } },
+      addEventListener: () => {}
+    },
+    console: { error: () => {} },
+    fetch: () => Promise.resolve()
+  }
+  sandbox.globalThis = sandbox
+  const context = vm.createContext(sandbox)
+
+  vm.runInContext(bundle, context, { filename: 'client.js' })
+  assert.equal(registrations, 1, 'one execution registers the factory once')
+
+  // The regression this guards: before the wrapper, this second call threw
+  // `SyntaxError: Identifier 'CAPTION_VIEWBOX' has already been declared`, which
+  // is what the host log showed on every page that re-ran the entry.
+  assert.doesNotThrow(
+    () => vm.runInContext(bundle, context, { filename: 'client.js' }),
+    'executing the bundle twice in one realm must not be a redeclaration error'
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -431,6 +475,407 @@ const openTree = component(props)
 const optionButtons = collect(openTree).filter((node) => node.type === 'button' && node.props.role === 'option')
 assert.equal(optionButtons.length, 3, 'every model of every group is offered')
 assert.ok(texts(openTree).includes('WorkBuddy (Mainland)'), 'groups are labelled by provider')
+
+// One card per provider, not one caption line in a flat column.
+//
+// Two providers routinely expose the same model names (the official catalogue
+// lists a Flash under both DeepSeek and DeepSeek Account), and a flat list makes
+// the boundary invisible. The card is the boundary, so it must exist per group,
+// name its provider for the assistive tree, and own the group's option buttons.
+{
+  const cards = collect(openTree).filter((node) => node.props.role === 'group')
+  assert.equal(cards.length, catalog.groups.length, 'every provider gets its own card')
+  for (const card of cards) {
+    assert.ok(typeof card.props['aria-label'] === 'string' && card.props['aria-label'].length > 0,
+      'a card names the provider it groups')
+    const options = collect(card).filter((node) => node.props.role === 'option')
+    assert.equal(options.length, catalog.groups.find((group) => group.name === card.props['aria-label']).models.length,
+      'a card holds exactly its own provider models')
+  }
+}
+// ---------------------------------------------------------------------------
+// A provider card folds, and the fold is remembered for the next start.
+// ---------------------------------------------------------------------------
+// A client plugin has no writable Cordis config, so the durable store is the same
+// localStorage the shipped client plugins use for their own UI state (sidebar
+// width, composer drafts). A mount reads the set once; a toggle writes it back.
+{
+  const cells = new Map()
+  globalThis.localStorage = {
+    getItem: (key) => (cells.has(key) ? cells.get(key) : null),
+    setItem: (key, value) => { cells.set(key, String(value)) },
+    removeItem: (key) => { cells.delete(key) }
+  }
+  try {
+    const foldMount = mount()
+    const foldProps = { ...props, ...foldMount.options.inject('session-1') }
+    hookState.length = 0
+    hookIndex = 0
+    collect(foldMount.component(foldProps)).filter(isTrigger)[0].props.onClick()
+    hookIndex = 0
+    const foldTree = foldMount.component(foldProps)
+    const card = collect(foldTree).find((node) => node.props.role === 'group')
+    assert.equal(card.props['aria-label'], 'WorkBuddy (Mainland)', 'the first card is the first provider')
+
+    const toggle = collect(card).find((node) => node.type === 'button' && node.props['aria-expanded'] === true)
+    assert.ok(toggle, 'an open card exposes a fold control')
+    assert.equal(toggle.props.title, '收起', 'the control is labelled in the active language')
+
+    toggle.props.onClick()
+    hookIndex = 0
+    const foldedTree = foldMount.component(foldProps)
+    const foldedCard = collect(foldedTree).find((node) => node.props.role === 'group')
+    assert.equal(collect(foldedCard).filter((node) => node.props.role === 'option').length, 0,
+      'a folded card renders no model rows')
+    assert.equal(cells.size, 1, 'the fold is written to storage')
+
+    // The next start: a fresh mount reads the set back before any interaction.
+    const nextMount = mount()
+    const nextProps = { ...props, ...nextMount.options.inject('session-1') }
+    hookState.length = 0
+    hookIndex = 0
+    collect(nextMount.component(nextProps)).filter(isTrigger)[0].props.onClick()
+    hookIndex = 0
+    const restored = nextMount.component(nextProps)
+    const restoredCard = collect(restored).find((node) => node.props.role === 'group')
+    assert.equal(collect(restoredCard).filter((node) => node.props.role === 'option').length, 0,
+      'the fold survives a remount')
+
+    // Searching opens every card for the duration of the query without discarding
+    // the saved fold.
+    hookIndex = 0
+    const type = (text) => {
+      hookIndex = 0
+      const box = collect(nextMount.component(nextProps)).find((node) => node.type === 'input')
+      box.props.onChange({ target: { value: text } })
+      hookIndex = 0
+      return nextMount.component(nextProps)
+    }
+    const searching = type('hy3')
+    assert.ok(collect(searching).some((node) => node.props.role === 'option'),
+      'a search shows matches even inside a folded card')
+    const cleared = type('')
+    assert.equal(collect(cleared).find((node) => node.props.role === 'group')
+      .props.className.includes('dmp-card-folded'), true,
+      'clearing the query restores the saved fold')
+
+    // A fold control is not offered while a search forces the cards open.
+    assert.ok(!collect(searching).some((node) => node.type === 'button'
+      && String(node.props.className ?? '').includes('dmp-card-head')),
+      'the header is not a fold control while searching')
+  } finally {
+    delete globalThis.localStorage
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Providers registered under one package share a card, and their rows carry
+// whatever that plugin publishes about them.
+// ---------------------------------------------------------------------------
+// The WorkBuddy plugin registers two providers for two deployments of one
+// product. Two cards would mean two headers saying almost the same thing, two
+// fold controls, and no way to compare the rows; the package prefix in the id is
+// what groups them, so this file never learns the plugin's name.
+{
+  const pkg = '@huai_xin/dsh-workbuddy'
+  const directory = createDirectory({ current: { provider: `${pkg}/cn`, model: 'hy3' } })
+  directory.__set({ groups: [
+    { id: `${pkg}/cn`, name: 'WorkBuddy (Mainland)', models: [
+      { id: 'hy3', name: 'Hy3' },
+      { id: 'pro', name: 'DeepSeek-V4-Pro' }
+    ] },
+    { id: `${pkg}/intl`, name: 'WorkBuddy (Overseas)', models: [
+      { id: 'hy3', name: 'Hy3' }
+    ] }
+  ] })
+  const mergedMount = mount({ directory })
+  const accountCalls = []
+  const renewCalls = []
+  let refreshCalls = 0
+  const mergedProps = {
+    ...props,
+    ...mergedMount.options.inject('session-1'),
+    modelStateSource: {
+      renew: async (region) => { renewCalls.push(region ?? null) },
+      refresh: async () => { refreshCalls += 1 },
+      refreshCredits: async (id) => { accountCalls.push(['credits', id]) },
+      login: async (id) => { accountCalls.push(['login', id]) },
+      getSnapshot: () => ({ version: 1, updatedAt: 1, providers: {
+        [`${pkg}/cn`]: { region: 'cn', loggedIn: true, credits: 1666.68, models: {
+          hy3: { name: 'Hy3', verdict: 'available', busy: 'idle', rate: 'free' },
+          pro: { name: 'DeepSeek-V4-Pro', verdict: 'rate limited', busy: 'congested', rate: '0.23x' }
+        } },
+        [`${pkg}/intl`]: { region: 'intl', loggedIn: false, credits: 0, models: {
+          hy3: { name: 'Hy3', verdict: 'unknown', busy: 'unknown', rate: 'unknown' }
+        } }
+      } }),
+      subscribe: () => () => {}
+    }
+  }
+  hookState.length = 0
+  hookIndex = 0
+  collect(mergedMount.component(mergedProps)).filter(isTrigger)[0].props.onClick()
+  hookIndex = 0
+  const mergedTree = mergedMount.component(mergedProps)
+  assert.ok(refreshCalls >= 1,
+    'opening the list asks the provider for fresh state instead of waiting for its poll')
+  const cards = collect(mergedTree).filter((node) => node.props.role === 'group')
+  assert.equal(cards.length, 1, 'two deployments of one package share one card')
+  assert.equal(cards[0].props['aria-label'], 'WorkBuddy', 'the card is named by the shared prefix')
+  assert.equal(cards[0].props['data-accent'], 'workbuddy', 'the provider plugin brings its own accent')
+  assert.ok(!texts(cards[0]).includes(`${pkg}/cn`),
+    'the header names the provider, it does not print the provider id')
+
+  const tabs = collect(cards[0])
+    .filter((node) => String(node.props.className ?? '').split(' ').includes('dmp-card-tab'))
+  assert.deepEqual(tabs.map((node) => node.children[0]), ['大陆版', '海外版'],
+    'a published region is named in the picker language, not the provider copy')
+  assert.deepEqual(tabs.map((node) => node.props['aria-pressed']), [true, false],
+    'the first deployment is the one showing')
+
+  const mergedOptions = collect(cards[0]).filter((node) => node.props.role === 'option')
+  assert.equal(mergedOptions.length, 2, 'only the deployment on screen renders its rows')
+  assert.deepEqual(mergedOptions.map((node) => node.props.key),
+    [`${pkg}/cn:pro`, `${pkg}/cn:hy3`],
+    'a pick still carries the exact provider id it came from')
+  assert.deepEqual(mergedOptions.map((node) => texts(node).join(' ').match(/DeepSeek-V4-Pro|Hy3/)?.[0]),
+    ['DeepSeek-V4-Pro', 'Hy3'],
+    'rows are listed by name, whatever order the provider registered them in')
+
+  // Switching the tab swaps the rows, and the pick carries the other provider id.
+  tabs[1].props.onClick()
+  hookIndex = 0
+  const overseasTree = mergedMount.component(mergedProps)
+  const overseasCard = collect(overseasTree).filter((node) => node.props.role === 'group')[0]
+  const overseasOptions = collect(overseasCard).filter((node) => node.props.role === 'option')
+  assert.deepEqual(overseasOptions.map((node) => node.props.key), [`${pkg}/intl:hy3`],
+    'the second tab lists that deployment and nothing else')
+
+  // The account line under each tab: the balance for a signed-in deployment, a
+  // way in for a signed-out one. Both actions belong to the provider plugin.
+  {
+    const credits = collect(mergedTree).filter((node) => String(node.props.className ?? '').includes('dmp-card-credits'))
+    assert.deepEqual(credits.map((node) => node.children[0]), ['积分 1666.68'],
+      'a signed-in deployment shows its balance')
+    const login = collect(mergedTree).filter((node) => String(node.props.className ?? '').includes('dmp-card-login'))
+    assert.deepEqual(login.map((node) => node.children[0]), ['登录'],
+      'a signed-out deployment offers a sign-in')
+    const refresh = collect(mergedTree).filter((node) => String(node.props.className ?? '').includes('dmp-card-refresh'))
+    assert.equal(refresh.length, 1, 'only the signed-in deployment has a balance to refresh')
+
+    await refresh[0].props.onClick()
+    await login[0].props.onClick()
+    assert.deepEqual(accountCalls, [['credits', `${pkg}/cn`], ['login', `${pkg}/intl`]],
+      'the header calls the provider service with the exact provider id')
+
+    // The renewal is a card-level action: one deployment means its own id, several
+    // mean "every deployment this plugin manages".
+    const renew = collect(mergedTree).filter((node) => String(node.props.className ?? '').includes('dmp-card-renew'))
+    assert.deepEqual(renew.map((node) => node.children[0]), ['续期'],
+      'the card header offers a renewal next to the fold control')
+    await renew[0].props.onClick()
+    assert.deepEqual(renewCalls, [null], 'a merged card renews every deployment it holds')
+  }
+
+  // A provider that publishes state asynchronously: before the first snapshot the
+  // rows say "unknown" and the balance says "loading", so nothing appears late.
+  {
+    const loadingProps = {
+      ...props,
+      ...mergedMount.options.inject('session-1'),
+      modelStateSource: {
+        getSnapshot: () => ({ version: 1, updatedAt: 0, providers: {} }),
+        subscribe: () => () => {},
+        refresh: async () => {}
+      }
+    }
+    hookState.length = 0
+    hookIndex = 0
+    collect(mergedMount.component(loadingProps)).filter(isTrigger)[0].props.onClick()
+    hookIndex = 0
+    const loadingTree = mergedMount.component(loadingProps)
+    const loadingTails = collect(loadingTree)
+      .filter((node) => String(node.props.className ?? '').split(' ').includes('dmp-item-tail'))
+      .map((node) => node.children[0])
+    assert.deepEqual(loadingTails, ['未知', '未知'], 'an unloaded row still shows a value slot')
+    const loadingDots = collect(loadingTree)
+      .filter((node) => String(node.props.className ?? '').includes('dmp-item-dot'))
+      .map((node) => node.props['data-tone'])
+    assert.deepEqual(loadingDots, ['unknown', 'unknown'], 'the load dot is grey, not absent')
+    const loadingCredits = collect(loadingTree)
+      .filter((node) => String(node.props.className ?? '').includes('dmp-card-credits'))
+      .map((node) => node.children[0])
+    assert.deepEqual(loadingCredits, ['积分 加载中…', '积分 加载中…'],
+      'the balance says it is loading instead of showing a dash')
+  }
+
+  // No provider publishes state at all: plain rows, no invented "unknown".
+  {
+    const plainProps = { ...props, ...mergedMount.options.inject('session-1') }
+    delete plainProps.modelStateSource
+    hookState.length = 0
+    hookIndex = 0
+    collect(mergedMount.component(plainProps)).filter(isTrigger)[0].props.onClick()
+    hookIndex = 0
+    const plainTree = mergedMount.component(plainProps)
+    assert.equal(collect(plainTree)
+      .filter((node) => String(node.props.className ?? '').includes('dmp-item-tail')).length, 0,
+    'a provider without state keeps plain rows')
+  }
+
+  // A signed-out deployment registers no models, so the catalogue drops it. Its
+  // plugin still publishes it, and the tab has to come back — otherwise signing
+  // out leaves no way to sign in again from this list.
+  {
+    const signedOut = createDirectory({ current: { provider: `${pkg}/cn`, model: 'hy3' } })
+    signedOut.__set({ groups: [
+      { id: `${pkg}/cn`, name: 'WorkBuddy (Mainland)', models: [{ id: 'hy3', name: 'Hy3' }] }
+    ] })
+    const signedMount = mount({ directory: signedOut })
+    const signedProps = {
+      ...props,
+      ...signedMount.options.inject('session-1'),
+      modelStateSource: {
+        getSnapshot: () => ({ version: 1, updatedAt: 9, providers: {
+          [`${pkg}/cn`]: { region: 'cn', loggedIn: true, credits: 10, models: {
+            hy3: { name: 'Hy3', verdict: 'available', busy: 'idle', rate: 'free' }
+          } },
+          [`${pkg}/intl`]: { region: 'intl', loggedIn: false, credits: null, models: {} }
+        } }),
+        subscribe: () => () => {},
+        refresh: async () => {},
+        login: async () => {},
+        refreshCredits: async () => {}
+      }
+    }
+    hookState.length = 0
+    hookIndex = 0
+    collect(signedMount.component(signedProps)).filter(isTrigger)[0].props.onClick()
+    hookIndex = 0
+    const signedTree = signedMount.component(signedProps)
+    const signedCard = collect(signedTree).filter((node) => node.props.role === 'group')[0]
+    const signedTabs = collect(signedCard)
+      .filter((node) => String(node.props.className ?? '').split(' ').includes('dmp-card-tab'))
+      .map((node) => node.children[0])
+    assert.deepEqual(signedTabs, ['大陆版', '海外版'], 'a signed-out deployment keeps its tab')
+    const signIn = collect(signedCard)
+      .filter((node) => String(node.props.className ?? '').includes('dmp-card-login'))
+    assert.deepEqual(signIn.map((node) => node.children[0]), ['登录'],
+      'and with it the way back in')
+  }
+
+  // Right after signing in, the credentials exist but the catalogue has not
+  // registered the models yet. The card must survive that window instead of
+  // vanishing; the tab says there is nothing to pick yet.
+  {
+    const mid = createDirectory({ current: { provider: `${pkg}/cn`, model: 'hy3' } })
+    mid.__set({ groups: [
+      { id: `${pkg}/cn`, name: 'WorkBuddy 大陆版', models: [{ id: 'hy3', name: 'Hy3' }] }
+    ] })
+    const midMount = mount({ directory: mid })
+    const midProps = {
+      ...props,
+      ...midMount.options.inject('session-1'),
+      modelStateSource: {
+        getSnapshot: () => ({ version: 1, updatedAt: 11, providers: {
+          [`${pkg}/cn`]: { region: 'cn', loggedIn: true, credits: 5, models: {
+            hy3: { name: 'Hy3', verdict: 'available', busy: 'idle', rate: 'free' }
+          } },
+          [`${pkg}/intl`]: { region: 'intl', loggedIn: true, credits: 0, models: {} }
+        } }),
+        subscribe: () => () => {},
+        refresh: async () => {},
+        login: async () => {},
+        refreshCredits: async () => {}
+      }
+    }
+    hookState.length = 0
+    hookIndex = 0
+    collect(midMount.component(midProps)).filter(isTrigger)[0].props.onClick()
+    hookIndex = 0
+    const midTree = midMount.component(midProps)
+    const midCard = collect(midTree).filter((node) => node.props.role === 'group')[0]
+    assert.ok(midCard !== undefined, 'the card survives the gap between sign-in and registration')
+    assert.deepEqual(collect(midCard)
+      .filter((node) => String(node.props.className ?? '').split(' ').includes('dmp-card-tab'))
+      .map((node) => node.children[0]), ['大陆版', '海外版'],
+    'both deployments keep their tab while the catalogue catches up')
+  }
+
+  // A card with one deployment has no tab strip; its balance still shows.
+  {
+    const solo = createDirectory({ current: { provider: 'solo', model: 'a' } })
+    solo.__set({ groups: [{ id: 'solo', name: 'Solo', models: [{ id: 'a', name: 'A' }] }] })
+    const soloMount = mount({ directory: solo })
+    const soloProps = {
+      ...props,
+      ...soloMount.options.inject('session-1'),
+      modelStateSource: {
+        getSnapshot: () => ({ version: 1, updatedAt: 3, providers: {
+          solo: { loggedIn: true, credits: 42, models: { a: { name: 'A', verdict: 'available', busy: 'idle', rate: 'free' } } }
+        } }),
+        subscribe: () => () => {},
+        refresh: async () => {},
+        login: async () => {},
+        refreshCredits: async () => {}
+      }
+    }
+    hookState.length = 0
+    hookIndex = 0
+    collect(soloMount.component(soloProps)).filter(isTrigger)[0].props.onClick()
+    hookIndex = 0
+    const soloTree = soloMount.component(soloProps)
+    const soloCredits = collect(soloTree)
+      .filter((node) => String(node.props.className ?? '').includes('dmp-card-credits'))
+    assert.deepEqual(soloCredits.map((node) => node.children[0]), ['积分 42'],
+      'a single-deployment card still shows its balance')
+    assert.equal(collect(soloTree)
+      .filter((node) => String(node.props.className ?? '').includes('dmp-card-account-solo')).length, 1,
+    'and the row sits under the header rather than in a missing tab strip')
+  }
+
+  // The tail: a callable model shows what it costs, a broken one shows why.
+  const tails = collect(cards[0])
+    .filter((node) => String(node.props.className ?? '').includes('dmp-item-tail'))
+    .map((node) => node.children[0])
+  assert.deepEqual(tails, ['限流', '免费'],
+    'free is translated, and a verdict replaces the rate')
+  assert.ok(!collect(cards[0]).some((node) => node.children?.[0] === '0.23x'),
+    'an unusable model does not advertise its price')
+
+  // The dot is the load level: reported levels are coloured, an unreported one is
+  // grey rather than absent, so every decorated row keeps its shape.
+  const dots = collect(cards[0]).filter((node) => String(node.props.className ?? '').includes('dmp-item-dot'))
+  assert.deepEqual(dots.map((node) => node.props['data-tone']), ['congested', 'idle'],
+    'the active deployment shows its reported load levels')
+  assert.deepEqual(dots.map((node) => node.props.title), ['极度拥堵', '空闲'],
+    'the tooltip names the degree the colour carries')
+  const overseasDots = collect(overseasCard)
+    .filter((node) => String(node.props.className ?? '').includes('dmp-item-dot'))
+  assert.deepEqual(overseasDots.map((node) => node.props['data-tone']), ['unknown'],
+    'a deployment that reports no load still gets a grey dot')
+  assert.equal(overseasDots[0].props.title, '未知', 'and says so on hover')
+
+  // A search drops the tabs so a match in the hidden deployment is not swallowed.
+  hookIndex = 0
+  const typeIn = (text) => {
+    const box = collect(mergedMount.component(mergedProps)).find((node) => node.type === 'input')
+    box.props.onChange({ target: { value: text } })
+    hookIndex = 0
+    return mergedMount.component(mergedProps)
+  }
+  const searched = typeIn('hy3')
+  assert.equal(collect(searched)
+    .filter((node) => String(node.props.className ?? '').split(' ').includes('dmp-card-tab')).length, 0,
+    'the tab strip is gone while searching')
+  assert.equal(collect(searched).filter((node) => node.props.role === 'option').length, 2,
+    'both deployments can match a search')
+  assert.deepEqual(collect(searched)
+    .filter((node) => String(node.props.className ?? '').includes('dmp-card-section-label'))
+    .map((node) => node.children[0]), ['大陆版', '海外版'],
+    'without tabs, a caption says which deployment a row came from')
+}
+
 const searchBox = collect(openTree).find((node) => node.type === 'input')
 assert.equal(searchBox?.props.placeholder, '搜索模型', 'the search box is localised')
 
@@ -441,14 +886,12 @@ assert.equal(searchBox?.props.placeholder, '搜索模型', 'the search box is lo
 await optionButtons[1].props.onClick()
 await new Promise((resolve) => setTimeout(resolve, 0))
 
-// A successful pick CLOSES the list. This is what the boolean-return bug broke:
-// `{ ok: true }` reached the component as `true`, `result?.ok === true` was
-// false, and the panel stayed open over a model that had already switched.
+// A successful pick KEEPS the list open: picking is a comparison, not a commit.
 {
   hookIndex = 0
   const afterPick = component(props)
   const stillOpen = collect(afterPick).find((node) => node.props.role === 'listbox')
-  assert.equal(stillOpen, undefined, 'choosing a model closes the list once the directory accepts it')
+  assert.ok(stillOpen !== undefined, 'choosing a model leaves the list open')
 }
 
 // ---------------------------------------------------------------------------
@@ -484,8 +927,8 @@ await new Promise((resolve) => setTimeout(resolve, 0))
     'a query that only matches as a subsequence still finds the model')
   assert.deepEqual(type('dsp'), ['DeepSeek V4 Pro'],
     'the model id is a second search key beside the display name')
-  assert.deepEqual(type('  '), ['GPT-6.1-Sol', 'Hy3', 'DeepSeek V4 Pro'],
-    'a blank query restores the full list in catalogue order')
+  assert.deepEqual(type('  '), ['DeepSeek V4 Pro', 'GPT-6.1-Sol', 'Hy3'],
+    'a blank query restores the full list, sorted by name')
   assert.deepEqual(type('zzz'), [], 'a query that matches nothing yields no rows')
 }
 
@@ -879,16 +1322,21 @@ hookIndex = 0
   assert.equal(effortTrig.props.disabled, false,
     'the level trigger stays live while its own change settles, so a drag is not cut short')
 
-  // A different model is a genuine switch: the trigger announces it.
+  // A different model is a genuine switch, and the trigger says so without moving:
+  // it stays enabled, keeps naming the model, and raises `aria-busy`. Swapping the
+  // label to "switching…" resized and dimmed the button on every pick, which with
+  // the panel staying open read as a flicker.
   directory.__set({
     status: 'selecting',
     pending: { provider: 'deepseek-account', model: 'deepseek-v4-pro' }
   })
   const [switchingTrig] = renderTriggers()
-  assert.equal(switchingTrig.props.disabled, true,
-    'a real model switch disables the trigger while it settles')
-  assert.ok(texts(switchingTrig).some((text) => text.includes('切换中')),
-    'a real model switch announces itself')
+  assert.equal(switchingTrig.props.disabled, false,
+    'a model switch does not disable the trigger, so the composer does not blink')
+  assert.equal(switchingTrig.props['aria-busy'], true,
+    'a model switch is announced to assistive tech instead')
+  assert.ok(!texts(switchingTrig).some((text) => text.includes('切换中')),
+    'the trigger keeps naming the model while the switch settles')
 }
 
 // ---------------------------------------------------------------------------
@@ -981,9 +1429,11 @@ assert.equal(component({ ...props, available: false }), null,
   hookIndex = 0
   const modelStyle = panelStyle(mounted.component(viewProps), 'dmp-panel')
   assert.ok(modelStyle, 'the model panel renders')
-  assert.equal(modelStyle.left, '50%', 'the model panel is centred on its trigger')
-  assert.match(modelStyle.transform, /^translateX\(calc\(-50% \+ -?\d+px\)\)$/,
-    'the model panel is centred, then shifted to stay inside the viewport')
+  // Anchored in PIXELS, not percentages: the containing block is the control row,
+  // whose width follows the button labels, and a percentage anchor slid the panel
+  // sideways whenever a pick changed the model name under it.
+  assert.match(String(modelStyle.left), /^-?\d+px$/, 'the model panel is anchored in pixels')
+  assert.equal(modelStyle.transform, undefined, 'no centring transform is left to fight the anchor')
 
   // The level slider.
   hookState.length = 0
@@ -994,9 +1444,7 @@ assert.equal(component({ ...props, available: false }), null,
   hookIndex = 0
   const sliderStyle = panelStyle(levelMount.component(levelProps), 'dmp-panel dmp-panel-slider')
   assert.ok(sliderStyle, 'the slider panel renders')
-  assert.equal(sliderStyle.left, '50%', 'the slider panel is centred on its trigger')
-  assert.match(sliderStyle.transform, /^translateX\(calc\(-50% \+ -?\d+px\)\)$/,
-    'the slider panel is centred, then shifted to stay inside the viewport')
+  assert.match(String(sliderStyle.left), /^-?\d+px$/, 'the slider panel is anchored in pixels too')
 }
 
 // ---------------------------------------------------------------------------
