@@ -327,6 +327,29 @@ function createCaptionMark(React) {
  * @returns the slider element tree.
  */
 
+/**
+ * Which accent a reasoning level uses, as a string the stylesheet matches on.
+ *
+ * The two highest stops are the only ones that differ: `top` (the last) takes the
+ * violet, `high` (the one before) the amber. Every other level — and the single-level
+ * case — returns undefined, which is what leaves the default blue in place and makes
+ * the two marked stops read as "above normal" rather than as two arbitrary colours in
+ * a five-colour ramp.
+ *
+ * It lives at module scope because it is shared: the slider marks itself with it, and
+ * so does the composer trigger, which renders outside this component's subtree.
+ *
+ * @param index - the level's position, 0-based.
+ * @param count - how many levels the model declares.
+ * @returns 'top' | 'high' | undefined
+ */
+function tierFor(index, count) {
+  if (count <= 1) return undefined
+  if (index === count - 1) return 'top'
+  if (index === count - 2) return 'high'
+  return undefined
+}
+
 function createEffortSlider(React) {
   const h = React.createElement
   const CaptionMark = createCaptionMark(React)
@@ -510,6 +533,14 @@ function createEffortSlider(React) {
      * level feel like more of the same instead of the end of the range.
      */
     const withTrail = count > 1 && index === count - 1
+    /**
+     * Which accent the current level uses.
+     *
+     * The two highest stops are the only ones that differ. Everything below keeps the
+     * normal blue, which is what makes the two marked stops read as "above normal"
+     * rather than as two arbitrary colours in a five-colour ramp.
+     */
+    const tier = tierFor(index, count)
 
     return h('div', {
       // `dmp-slider-dragging` drops the left transition on the knob, the fill and
@@ -518,6 +549,9 @@ function createEffortSlider(React) {
       // from a position the knob had not reached yet.
       className: `dmp-slider${dragging === null ? '' : ' dmp-slider-dragging'}`,
       'aria-disabled': disabled === true,
+      // The stylesheet picks the accent from this: 'top' and 'high' are the two
+      // levels with their own colour, everything else leaves it unset.
+      'data-tier': tier,
       style: { '--dmp-effort-at': position(index) }
     },
       h('div', { className: 'dmp-slider-head' },
@@ -753,9 +787,16 @@ const CSS = `
   margin-top: -7px; }
 /* The tag names the level; it is not a brightness meter. Taking the ramp colour here
    made "Low" render dim grey and "High" near white, so the control appeared to change
-   weight as the level moved. The ramp stays on the track, where it means intensity. */
+   weight as the level moved. The ramp stays on the track, where it means intensity.
+
+   The two tier levels are the exception, and they are the point of the tiers: the name
+   itself takes the tier accent, so the button in the composer row carries the same
+   colour as the bar inside the panel it opens. */
 .dmp-trigger-effort-text { flex: 1 1 auto; min-width: 0; text-align: center;
   color: var(--dsw-alias-label-primary); font-weight: 600; }
+.dmp-trigger-effort[data-tier="top"] .dmp-trigger-effort-text,
+.dmp-trigger-effort[data-tier="high"] .dmp-trigger-effort-text {
+  color: var(--dmp-accent); }
 /* Hover and open share ONE background, and it is the translucent interactive
    token, not the opaque layer-2 surface.
    The layer-2 token resolves to the composer's own surface colour in both themes
@@ -859,12 +900,14 @@ const CSS = `
   height: 22px; box-sizing: border-box; padding: 0 8px; border-radius: 8px;
   font-size: 12px; line-height: 1; font-weight: 600; white-space: nowrap;
   letter-spacing: .01em;
-  /* The pill is a label, not a rank meter: it must read the SAME at every level.
-     It used to take the level's ramp colour, so Low rendered dim grey and Max near
-     white — the same component looking like two different things depending on the
-     setting. The ramp colour stays on the track, where it encodes intensity. */
+  /* The pill is a label, not a rank meter, so it reads the same at every level — EXCEPT
+     the two that carry a tier accent: those take the accent colour in the panel's top
+     right corner too, which is what ties the label to the bar below it. Without a tier
+     the colour is the plain primary label. */
   color: var(--dsw-alias-label-primary);
   background: var(--dsw-alias-interactive-bg-hover); }
+.dmp-slider[data-tier="top"] .dmp-slider-value,
+.dmp-slider[data-tier="high"] .dmp-slider-value { color: var(--dmp-accent); }
 /* Reasoning effort: the slider.
    ---------------------------------------------------------------------------
    A thick pill-shaped track with a solid accent fill and a disc riding on it. The
@@ -898,6 +941,23 @@ const CSS = `
    while the app looks pale — the demo used to hard-code a blue of its own. */
 .dmp-slider { --dmp-accent: var(--dsw-static-deepseek-450,
     var(--dsw-alias-state-business-primary, var(--dsw-alias-brand-primary))); }
+/* The two top levels get their own accent.
+   Borrowed from Codex's TUI, which reserves colour for its highest tiers rather than
+   painting a ramp across every stop: its Ultra is a violet family and its Max is an
+   amber one. Here the LAST stop takes Ultra's violet and the second-to-last takes
+   Max's amber, so the two highest levels are the ones that look different — a level
+   below that keeps the normal blue, which is what makes the distinction mean
+   something.
+   The values are the dark-background hues from Codex's tier table. Each tier carries
+   a three-hue set there for its gradient animation; only the first is used here, since
+   this control does not run that animation.
+   data-tier is set by the component on the slider AND on the trigger, because the
+   same accent has to reach the level button in the composer row, which is outside the
+   panel's subtree. */
+.dmp-slider[data-tier="top"],
+.dmp-trigger-effort[data-tier="top"] { --dmp-accent: #ba82ff; }
+.dmp-slider[data-tier="high"],
+.dmp-trigger-effort[data-tier="high"] { --dmp-accent: #f7c473; }
 /* Radius is a LITERAL 15px on a 28px-tall rail — deliberately ONE more than half the
    height, so the ends curve a touch harder than a true semicircle and read as round
    rather than as pillowed caps. Anything below half looks square; this is the
@@ -1697,6 +1757,11 @@ function createModelPicker(React) {
         type: 'button',
         ref: effortAnchor.ref,
         className: 'dmp-trigger dmp-trigger-effort',
+        // The two highest levels name themselves in their accent colour here, so the
+        // tag in the composer row carries the same colour as the bar in the panel it
+        // opens. The slider computes the value for its own subtree; this component has
+        // to compute it again because the tag is NOT a descendant of the slider.
+        'data-tier': tierFor(efforts.findIndex((effort) => effort.id === activeEffortId), efforts.length),
         // Only a locked composer disables the level tag. Its own commits flip the
         // directory to `selecting`, and disabling here killed the drag after the
         // first stop — the same reason the slider's range input stays enabled.

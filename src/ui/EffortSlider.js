@@ -34,6 +34,29 @@
  */
 import { createCaptionMark } from './CaptionMark.js'
 
+/**
+ * Which accent a reasoning level uses, as a string the stylesheet matches on.
+ *
+ * The two highest stops are the only ones that differ: `top` (the last) takes the
+ * violet, `high` (the one before) the amber. Every other level — and the single-level
+ * case — returns undefined, which is what leaves the default blue in place and makes
+ * the two marked stops read as "above normal" rather than as two arbitrary colours in
+ * a five-colour ramp.
+ *
+ * It lives at module scope because it is shared: the slider marks itself with it, and
+ * so does the composer trigger, which renders outside this component's subtree.
+ *
+ * @param index - the level's position, 0-based.
+ * @param count - how many levels the model declares.
+ * @returns 'top' | 'high' | undefined
+ */
+export function tierFor(index, count) {
+  if (count <= 1) return undefined
+  if (index === count - 1) return 'top'
+  if (index === count - 2) return 'high'
+  return undefined
+}
+
 export function createEffortSlider(React) {
   const h = React.createElement
   const CaptionMark = createCaptionMark(React)
@@ -217,6 +240,14 @@ export function createEffortSlider(React) {
      * level feel like more of the same instead of the end of the range.
      */
     const withTrail = count > 1 && index === count - 1
+    /**
+     * Which accent the current level uses.
+     *
+     * The two highest stops are the only ones that differ. Everything below keeps the
+     * normal blue, which is what makes the two marked stops read as "above normal"
+     * rather than as two arbitrary colours in a five-colour ramp.
+     */
+    const tier = tierFor(index, count)
 
     return h('div', {
       // `dmp-slider-dragging` drops the left transition on the knob, the fill and
@@ -225,6 +256,9 @@ export function createEffortSlider(React) {
       // from a position the knob had not reached yet.
       className: `dmp-slider${dragging === null ? '' : ' dmp-slider-dragging'}`,
       'aria-disabled': disabled === true,
+      // The stylesheet picks the accent from this: 'top' and 'high' are the two
+      // levels with their own colour, everything else leaves it unset.
+      'data-tier': tier,
       style: { '--dmp-effort-at': position(index) }
     },
       h('div', { className: 'dmp-slider-head' },

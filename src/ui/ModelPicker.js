@@ -1,7 +1,7 @@
 import { rankByName } from '../core/rank.js'
 import { Chevron } from './Chevron.js'
 import { createAnchoredPanel } from './anchor.js'
-import { createEffortSlider } from './EffortSlider.js'
+import { createEffortSlider, tierFor } from './EffortSlider.js'
 import { CSS } from './styles.js'
 import { dictionaryFor } from './dict.js'
 
@@ -473,6 +473,11 @@ export function createModelPicker(React) {
         type: 'button',
         ref: effortAnchor.ref,
         className: 'dmp-trigger dmp-trigger-effort',
+        // The two highest levels name themselves in their accent colour here, so the
+        // tag in the composer row carries the same colour as the bar in the panel it
+        // opens. The slider computes the value for its own subtree; this component has
+        // to compute it again because the tag is NOT a descendant of the slider.
+        'data-tier': tierFor(efforts.findIndex((effort) => effort.id === activeEffortId), efforts.length),
         // Only a locked composer disables the level tag. Its own commits flip the
         // directory to `selecting`, and disabling here killed the drag after the
         // first stop — the same reason the slider's range input stays enabled.

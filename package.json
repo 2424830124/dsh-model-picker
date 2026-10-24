@@ -1,6 +1,6 @@
 {
   "name": "@huai_xin/dsh-model-picker",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "A searchable, provider-grouped replacement for the DSH composer's model picker.",
   "type": "module",
   "license": "MIT",
@@ -35,7 +35,8 @@
     "locale/*.json",
     "icon.svg",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "docs/*.png"
   ],
   "scripts": {
     "build": "node scripts/build.mjs",

@@ -722,10 +722,17 @@ await new Promise((resolve) => setTimeout(resolve, 0))
     .every((node) => node.props.disabled === true), 'all jump targets respect a locked composer')
 
   const css = readFileSync(new URL('src/ui/styles.js', root), 'utf8').split('/* Reasoning effort:')[1]
-  // Theme tokens everywhere, with one deliberate exception: pure black and pure white.
-  // Those read the same in both themes (an outline must look like an outline, a knob
-  // must look raised), so a token would only make them less predictable. Any mid-tone
-  // literal is still a mistake and is rejected.
+  // Theme tokens everywhere, with two deliberate exceptions.
+  //
+  // 1. Pure black and pure white. Those read the same in both themes (an outline must
+  //    look like an outline, a knob must look raised), so a token would only make them
+  //    less predictable.
+  // 2. The two tier accents. These are not this plugin's invention — they are the
+  //    dark-background hues Codex's own TUI uses for its Ultra (violet) and Max
+  //    (amber) tiers, adopted so the two highest levels match that convention. The
+  //    host exposes no token for them, and inventing one via color-mix would drift
+  //    from the source values. Any other mid-tone literal is still rejected.
+  const TIER_ACCENTS = ['ba82ff', 'f7c473']
   const literals = [...css.matchAll(/(#[0-9a-f]{3,8}\b|rgba?\([^)]*\))/gi)].map((m) => m[0])
   const forbidden = literals.filter((value) => {
     const hex = /^#([0-9a-f]{3,8})$/i.exec(value)
@@ -733,10 +740,24 @@ await new Promise((resolve) => setTimeout(resolve, 0))
     const digits = hex[1].length === 3
       ? hex[1].split('').map((digit) => digit + digit).join('')
       : hex[1].slice(0, 6)
-    return !['000000', 'ffffff'].includes(digits.toLowerCase())
+    const lower = digits.toLowerCase()
+    return !['000000', 'ffffff'].includes(lower) && !TIER_ACCENTS.includes(lower)
   })
   assert.deepEqual(forbidden, [],
     'effort styles use theme tokens, never mid-tone literal colours')
+  // The tier colours must actually be wired to the two top stops, not merely allowed
+  // by the filter above. The block is matched from its selector through its closing
+  // brace, so a rule that loses its colour fails even if the value still appears
+  // somewhere else in the sheet.
+  const flat = css.replace(/\s+/g, ' ')
+  const tierBlock = (tier) => {
+    const at = flat.indexOf(`[data-tier="${tier}"]`)
+    if (at < 0) return ''
+    const close = flat.indexOf('}', at)
+    return close < 0 ? '' : flat.slice(at, close)
+  }
+  assert.match(tierBlock('top'), /ba82ff/, 'the top level takes the violet tier accent')
+  assert.match(tierBlock('high'), /f7c473/, 'the second-highest level takes the amber tier accent')
   assert.ok(css.includes('prefers-reduced-motion'), 'the effort view respects reduced motion')
 }
 
