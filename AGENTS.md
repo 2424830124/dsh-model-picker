@@ -389,6 +389,10 @@ CSS 选择器够不着；所以 `ModelPicker` 自己算一遍挂到按钮上。�
 - 服务**是可选的**：`src/client.js` 用 `createProviderStateSource(scope, name)` 晚绑定地包一层，
   每次都重新 `scope.get`，拿不到就返回空快照——**绝不要把它写进 `inject`**。写进去而对方没装，
   Cordis 会一直等这个服务，我们的槽位就永远不注册，整个插件"消失"；
+- 服务名**是写死的**（`PROVIDER_STATE = '@huai_xin/dsh-workbuddy/state'`），不是通用的"任何插件发布
+  同形状服务都能接入"——README 里说"没有白名单"指的是**卡片合并和强调色表**（`cardKeyOf` 按 id 前缀、
+  `CARD_ACCENTS` 查表），状态服务这一层就是点名绑定。第三家想接入时把 `PROVIDER_STATE` 换成可配置的
+  服务名列表，别在文案里先把话说满；
 - 读的时候整表按 `providerId` → `modelId` 两级查找，键与目录里的 `group.id` / `model.id` 完全一致，
   不需要归一化。
 
