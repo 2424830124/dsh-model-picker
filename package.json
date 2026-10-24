@@ -1,6 +1,6 @@
 {
   "name": "@huai_xin/dsh-model-picker",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "A searchable, provider-grouped replacement for the DSH composer's model picker.",
   "type": "module",
   "license": "MIT",
