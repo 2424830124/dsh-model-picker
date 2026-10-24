@@ -588,9 +588,12 @@ await new Promise((resolve) => setTimeout(resolve, 0))
 
   hookIndex = 0
   const moved = liveMount.component(recording)
-  const slider = collect(moved).find((node) => node.props.className === 'dmp-slider')
+  const slider = collect(moved).find((node) => typeof node.props.className === 'string'
+    && node.props.className.split(' ').includes('dmp-slider'))
   assert.equal(slider?.props.style['--dmp-effort-at'], '100%',
     'the thumb follows the pointer before the Host confirms')
+  assert.ok(String(slider?.props.className).includes('dmp-slider-dragging'),
+    'a drag is flagged so the knob, fill and emitter snap instead of easing')
 }
 
 // Switching models starts the new model at ITS default level.
@@ -736,6 +739,39 @@ await new Promise((resolve) => setTimeout(resolve, 0))
     'effort styles use theme tokens, never mid-tone literal colours')
   assert.ok(css.includes('prefers-reduced-motion'), 'the effort view respects reduced motion')
 }
+
+// Every panel asks the host to lift the composer's stacking context.
+//
+// The chat's "jump to latest" button is a SIBLING of the composer seat and paints at
+// z-index 8, while the seat sits at z-index 7. A panel is a descendant of the seat, so
+// no z-index of its own can paint over that button — a child cannot escape its
+// parent's stacking context. The host exposes one supported hook: the seat is raised
+// to z-index 9 when it CONTAINS `[data-trigger-menu]`, so each panel carries it.
+for (const [label, className, index] of [
+  ['model', 'dmp-panel', 0],
+  ['effort', 'dmp-panel dmp-panel-slider', 1]
+]) {
+  // A fresh mount per panel: the shared fixture's catalogue carries no reasoning
+  // levels, so the level trigger only exists on a mount whose model declares them.
+  const mounted = mount()
+  const viewProps = { ...props, ...mounted.options.inject('session-1') }
+
+  hookState.length = 0
+  hookIndex = 0
+  const trigger = collect(mounted.component(viewProps)).filter(isTrigger)[index]
+  assert.ok(trigger, `the ${label} trigger renders`)
+
+  trigger.props.onClick()
+  hookIndex = 0
+  const panel = collect(mounted.component(viewProps))
+    .find((node) => node.props.className === className)
+  assert.ok(panel, `the ${label} panel opens`)
+  assert.equal(panel.props['data-trigger-menu'], '',
+    `the ${label} panel asks the host to raise the composer above the jump-to-latest button`)
+}
+// Reset the panel state for the tests that follow.
+hookState.length = 0
+hookIndex = 0
 
 // ---------------------------------------------------------------------------
 // The slider's DOM value follows a level chosen WITHOUT a drag.

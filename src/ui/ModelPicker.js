@@ -490,6 +490,14 @@ export function createModelPicker(React) {
         className: 'dmp-panel dmp-panel-slider',
         role: 'dialog',
         'aria-label': t.effortHeading,
+        // The host lifts the composer's stacking context when one of its own menus
+        // is open: `.composerSeat:has([data-trigger-menu]) { z-index: 9 }`. Without
+        // it the seat stays at z-index 7, and the chat's "jump to latest" button
+        // (z-index 8, a sibling of the seat) paints over this panel no matter what
+        // z-index the panel itself asks for — a child cannot escape its parent's
+        // stacking context. Marking the panel is the supported way to ask for the
+        // same lift.
+        'data-trigger-menu': '',
         ref: effortAnchor.panelRef,
         style: effortAnchor.style
       },
@@ -517,6 +525,8 @@ export function createModelPicker(React) {
       ? h('div', {
         className: 'dmp-panel',
         role: 'listbox',
+        // Same stacking lift as the effort panel: see the comment there.
+        'data-trigger-menu': '',
         ref: modelAnchor.panelRef,
         style: modelAnchor.style
       },

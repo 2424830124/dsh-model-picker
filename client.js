@@ -332,6 +332,37 @@ function createEffortSlider(React) {
   const CaptionMark = createCaptionMark(React)
   const { useState, useEffect, useRef } = React
 
+  /**
+   * The exhaust table.
+   *
+   * Fixed numbers, never `Math.random()`: a render has to be pure, and the stream
+   * must look identical every time the panel opens.
+   *
+   * `dy0` is what makes the particles leave the knob's whole CROSS-SECTION rather
+   * than one point in its centre — it spreads the spawn points down the knob's
+   * height. `dx` / `dy` / `sz` / `rot` stop the squares from marching in step, and
+   * the per-particle `--i` turns one keyframe into a continuous stream (see the
+   * negative `animation-delay` in the stylesheet).
+   */
+  const EMIT = [
+    { dy0: -11, dx: -58, dy: -3, sz: 4, rot: 0 },
+    { dy0: -7, dx: -74, dy: -5, sz: 3, rot: 45 },
+    { dy0: -3, dx: -62, dy: -1, sz: 5, rot: 0 },
+    { dy0: 1, dx: -88, dy: 2, sz: 3, rot: 90 },
+    { dy0: 5, dx: -66, dy: 4, sz: 4, rot: 0 },
+    { dy0: 9, dx: -80, dy: 6, sz: 3, rot: 45 },
+    { dy0: -9, dx: -92, dy: -6, sz: 3, rot: 90 },
+    { dy0: -5, dx: -54, dy: -2, sz: 4, rot: 0 },
+    { dy0: -1, dx: -70, dy: 0, sz: 3, rot: 45 },
+    { dy0: 3, dx: -84, dy: 3, sz: 4, rot: 0 },
+    { dy0: 7, dx: -60, dy: 5, sz: 3, rot: 90 },
+    { dy0: 11, dx: -76, dy: 7, sz: 3, rot: 0 },
+    { dy0: -8, dx: -68, dy: -4, sz: 4, rot: 45 },
+    { dy0: 0, dx: -90, dy: 1, sz: 3, rot: 0 },
+    { dy0: 6, dx: -52, dy: 4, sz: 4, rot: 90 },
+    { dy0: -2, dx: -78, dy: -1, sz: 3, rot: 0 }
+  ]
+
   return function EffortSlider({ efforts, activeId, disabled, onChange, t, caption }) {
     const count = efforts.length
     const incoming = Math.max(0, efforts.findIndex((effort) => effort.id === activeId))
@@ -365,7 +396,11 @@ function createEffortSlider(React) {
     const position = (at) => count <= 1 ? '50%' : `${(at / (count - 1)) * 100}%`
 
     return h('div', {
-      className: 'dmp-slider',
+      // `dmp-slider-dragging` drops the left transition on the knob, the fill and
+      // the emitter together. Without it the knob eases to its new stop over 150ms
+      // while a transition-free emitter jumps there at once, so the particles left
+      // from a position the knob had not reached yet.
+      className: `dmp-slider${dragging === null ? '' : ' dmp-slider-dragging'}`,
       'aria-disabled': disabled === true,
       style: { '--dmp-effort-at': position(index) }
     },
@@ -378,6 +413,40 @@ function createEffortSlider(React) {
         h('span', { className: 'dmp-slider-value' }, activeName)),
 
       h('div', { className: 'dmp-slider-rail' },
+        /**
+         * The rail's outline, drawn as vector art.
+         *
+         * This started as a `box-shadow` inset, which is a RASTER edge: at 1px it
+         * lands on the pixel grid but reads flat, and at 1.5px it falls between
+         * pixels and smears into a grey band. The knob's ring never had that problem
+         * because it is an SVG stroke — a vector edge, crisp at any scale.
+         *
+         * So the outline uses the same primitive as the knob: a `<rect>` with a
+         * stroked edge, sized to the rail and scaled to it by `preserveAspectRatio`
+         * being off. `vector-effect: non-scaling-stroke` keeps the stroke exactly
+         * 1px however the rect is stretched, so the line stays hairline-crisp instead
+         * of being squashed by the horizontal stretch. `rx` is a percentage of the
+         * half-height, matching the rail's own rounded ends.
+         */
+        h('svg', {
+          className: 'dmp-slider-outline',
+          'aria-hidden': true,
+          preserveAspectRatio: 'none'
+        },
+        h('rect', {
+          // Half the stroke on each axis: an SVG stroke straddles the path, so a 2px
+          // line on the exact edge would be half-clipped by the rail's clip-path.
+          x: 1,
+          y: 1,
+          width: 'calc(100% - 2px)',
+          height: 'calc(100% - 2px)',
+          rx: 14,
+          ry: 14,
+          fill: 'none',
+          stroke: 'var(--dsw-alias-border-l3)',
+          strokeWidth: 2,
+          vectorEffect: 'non-scaling-stroke'
+        })),
         /**
          * The moving parts live in an INSET track.
          *
@@ -392,6 +461,28 @@ function createEffortSlider(React) {
          */
         h('div', { className: 'dmp-slider-track' },
           h('div', { className: 'dmp-slider-fill', 'aria-hidden': true }),
+          /**
+           * The exhaust.
+           *
+           * An empty box pinned at the knob's position (`--dmp-effort-at`), carrying
+           * the particle squares. It is a SIBLING of the knob inside the same inset
+           * track, so it shares the knob's coordinate space and its transition —
+           * which is what keeps the spawn point under the knob while it moves.
+           * The rail's clip-path trims whatever drifts past the end cap.
+           */
+          h('span', { className: 'dmp-emit', 'aria-hidden': true },
+            EMIT.map((particle, at) => h('i', {
+              key: at,
+              className: 'dmp-emit-p',
+              style: {
+                '--i': at,
+                '--dx': `${particle.dx}px`,
+                '--dy0': `${particle.dy0}px`,
+                '--dy': `${particle.dy}px`,
+                '--sz': `${particle.sz}px`,
+                '--rot': `${particle.rot}deg`
+              }
+            }))),
           h('div', { className: 'dmp-slider-dots', 'aria-hidden': true },
             efforts.map((effort, at) => h('span', {
               key: effort.id,
@@ -646,18 +737,31 @@ const CSS = `
    The fill and the active label take the host's business-primary token — the same
    accent DSH uses for its own interactive highlights — so the control recolours
    with the theme instead of carrying a blue that only suits one of them. */
-/* The knob is the rail's full height (32px). The two stop offsets are deliberately
-   UNEQUAL:
-     --dmp-stop-left  32px  the first stop sits a full knob diameter in from the
-                            left cap, so the knob stops short of that end;
-     --dmp-stop-right 16px  the last stop is one knob RADIUS in from the right cap,
-                            so the knob reaches that end flush.
-   That asymmetry is the requested behaviour, not an oversight. The dots, the
-   labels, the fill and the native input's travel all derive from these two numbers,
-   which is why they are variables rather than four copies of the same value. */
+/* The knob is the rail's full height (28px). Both ends keep the knob clear of the
+   rail's cap, but by DIFFERENT amounts — that asymmetry is the requested behaviour,
+   not an oversight:
+     --dmp-stop-left  28px  the first stop sits a full knob diameter in from the
+                            left cap, so the knob stops well short of that end;
+     --dmp-stop-right 16px  the last stop sits just past the knob's radius (14), so a
+                            hairline of track shows beyond the knob at the top level.
+   The right gap is deliberately the same weight as the knob's own ring: at 14 the
+   knob landed exactly on the cap and the two outlines met, which read as a smudge
+   rather than as a stop. The dots, the labels, the fill and the native input's
+   travel all derive from these two numbers, which is why they are variables rather
+   than four copies of the same value. */
 .dmp-slider { --dmp-rail-height: 28px; --dmp-thumb-size: 28px;
-  --dmp-stop-left: 28px; --dmp-stop-right: 14px; }
-/* Radius is a LITERAL 17px on a 32px-tall rail — deliberately ONE more than half the
+  --dmp-stop-left: 28px; --dmp-stop-right: 16px; }
+/* The accent.
+   The alias token is one step too pale on a dark panel: in the dark theme
+   --dsw-alias-state-business-primary resolves to the deepseek-400 step, which reads
+   as washed out against the panel surface. The ramp's next step down, deepseek-450,
+   is the same hue with the weight the bar needs. The alias token stays as the
+   fallback so a future ramp change still lands on something.
+   The preview pages carry these same values, which is why a preview can look right
+   while the app looks pale — the demo used to hard-code a blue of its own. */
+.dmp-slider { --dmp-accent: var(--dsw-static-deepseek-450,
+    var(--dsw-alias-state-business-primary, var(--dsw-alias-brand-primary))); }
+/* Radius is a LITERAL 15px on a 28px-tall rail — deliberately ONE more than half the
    height, so the ends curve a touch harder than a true semicircle and read as round
    rather than as pillowed caps. Anything below half looks square; this is the
    user-tuned value.
@@ -673,6 +777,14 @@ const CSS = `
   margin: 12px 0 4px; border-radius: 15px; flex: none;
   clip-path: inset(0 round 15px);
   background: color-mix(in srgb, var(--dsw-alias-label-primary) 12%, transparent); }
+/* The outline: vector, like the knob's ring.
+   An inset box-shadow is a raster edge — 1px reads flat and 1.5px falls between
+   pixels and smears. This SVG stretches to the rail with preserveAspectRatio none
+   and keeps its stroke at exactly 1px through vector-effect, so the line is as
+   crisp as the knob's circle. It sits above the fill so it stays visible across the
+   blue, and pointer-events none keeps the range input reachable underneath. */
+.dmp-slider-outline { position: absolute; inset: 0; width: 100%; height: 100%;
+  pointer-events: none; z-index: 7; overflow: visible; }
 /* The stop axis. Its ends are the two stop offsets, which is why 0% is the first
    stop and 100% the last — the knob's travel, the dots, the labels and the fill all
    read from this one box. */
@@ -688,20 +800,59 @@ const CSS = `
 .dmp-slider-fill { position: absolute; top: 0; height: var(--dmp-rail-height);
   left: calc(var(--dmp-stop-left) * -1);
   width: calc(var(--dmp-effort-at) + var(--dmp-stop-left));
-  background: var(--dsw-alias-state-business-primary, var(--dsw-alias-brand-primary));
+  background: var(--dmp-accent);
   z-index: 1; transition: width .15s ease-out; pointer-events: none; }
 .dmp-slider-dots { position: absolute; top: 0; bottom: 0; left: 0; right: 0;
   pointer-events: none; z-index: 2; }
-/* Stops stay SMALL and GREY: they mark the stations, the knob is what you grab.
-   The reached stop used to take the panel's surface colour, which is near-black in
-   the dark theme — a black pinhole punched into the blue. Both states now use the
-   label ramp, so a dot reads as grey on the track and as light grey on the fill. */
+/* Stops stay SMALL and GREY, and they are only visible AHEAD of the knob: the blue
+   fill already says "you are this far", so a dot sitting on it read as dust on the
+   colour. Unreached stops keep working as tick marks on the empty part of the track,
+   which is where they still carry information. */
 .dmp-slider-dot { position: absolute; top: 50%; width: 5px; height: 5px;
   border-radius: 50%; transform: translate(-50%, -50%);
   background: var(--dsw-alias-label-tertiary, currentColor); opacity: .55;
-  transition: opacity .15s ease-out, background .15s ease-out; }
-/* A reached stop sits on the coloured fill, so it lightens instead of going dark. */
-.dmp-slider-dot-lit { background: var(--dsw-alias-label-secondary, currentColor); opacity: .9; }
+  transition: opacity .15s ease-out; }
+.dmp-slider-dot-lit { opacity: 0; }
+/* The exhaust: a zero-size point pinned to the knob, carrying the particles.
+   It sits ABOVE the fill and BELOW the knob, so squares are born behind the disc and
+   drift out from under it. Its left offset carries the SAME transition as the knob — that
+   is the whole alignment contract: both are driven by --dmp-effort-at, so as long as
+   they animate with the same duration and easing the spawn point stays under the
+   knob while it travels. (A drag drops the transition on both; see the dragging
+   rule below, which is what fixed particles appearing ahead of the knob.) */
+.dmp-emit { position: absolute; top: 50%; left: var(--dmp-effort-at);
+  width: 0; height: 0; z-index: 3; pointer-events: none;
+  transition: left .15s ease-out; }
+/* One square. The dy0 offset spreads the spawn points down the knob cross-section; the
+   extra dy/dx send each one its own way so they do not travel as a block. */
+.dmp-emit-p { position: absolute; left: 0; top: 0;
+  width: var(--sz, 4px); height: var(--sz, 4px); border-radius: 1px;
+  background: color-mix(in srgb, var(--dsw-alias-label-primary) 92%, transparent);
+  box-shadow: 0 0 4px color-mix(in srgb,
+    var(--dmp-accent) 80%, transparent);
+  opacity: 0; transform: translate(-50%, -50%);
+  animation: dmp-emit 1.7s cubic-bezier(.25,.1,.6,1) infinite;
+  animation-delay: calc(var(--i) * -106ms); }
+/* The streak left behind the sheet of squares. */
+.dmp-emit::before { content: ''; position: absolute; right: 4px; top: 50%;
+  width: 54px; height: 8px; transform: translateY(-50%); border-radius: 6px;
+  background: linear-gradient(270deg,
+    color-mix(in srgb, var(--dsw-alias-label-primary) 30%, transparent),
+    color-mix(in srgb, var(--dsw-alias-label-primary) 8%, transparent) 45%,
+    transparent);
+  filter: blur(2px); animation: dmp-emit-trail 1.7s ease-in-out infinite; }
+@keyframes dmp-emit {
+  0% { transform: translate(-50%, -50%) translate(0, var(--dy0)) scale(1); opacity: 0; }
+  14% { opacity: .95; }
+  70% { opacity: .5; }
+  100% { transform: translate(-50%, -50%)
+    translate(var(--dx), calc(var(--dy0) + var(--dy))) scale(.2) rotate(var(--rot)); opacity: 0; } }
+@keyframes dmp-emit-trail { 0%, 100% { opacity: .3; } 50% { opacity: .75; } }
+/* A drag is direct manipulation: the knob, the fill and the emitter all snap to the
+   pointer instead of easing, which keeps the particles born exactly at the knob. */
+.dmp-slider-dragging .dmp-slider-thumb,
+.dmp-slider-dragging .dmp-slider-fill,
+.dmp-slider-dragging .dmp-emit { transition: none; }
 /* The knob fills the rail's height and is drawn as an SVG, so no inherited
    border-radius, padding or box-sizing rule can square it off. Its size comes from
    --dmp-thumb-size; the stop offsets and the input's travel are derived from the
@@ -721,7 +872,7 @@ const CSS = `
 .dmp-slider-rail:active .dmp-slider-thumb { transform: scale(1.06); }
 .dmp-slider-rail:has(.dmp-slider-input:focus-visible) .dmp-slider-thumb {
   box-shadow: 0 0 0 3px color-mix(in srgb,
-    var(--dsw-alias-state-business-primary, var(--dsw-alias-brand-primary)) 35%, transparent); }
+    var(--dmp-accent) 35%, transparent); }
 /* The range input spans from the first stop's reach to the rail's right edge, and
    its native thumb is the knob's size. That makes its invisible thumb's centre
    travel exactly from --dmp-stop-left to (width - stop-right) — the same axis the
@@ -760,8 +911,15 @@ const CSS = `
   font-family: Montserrat, var(--dsw-font-family-sans, system-ui, sans-serif);
   white-space: nowrap; cursor: pointer;
   max-width: 45%; overflow: hidden; text-overflow: ellipsis; }
-.dmp-slider-tick[data-edge="start"] { transform: none; margin-left: -4px; }
-.dmp-slider-tick[data-edge="end"] { transform: translateX(-100%); margin-left: 4px; }
+/* Every label is centred on its stop.
+   The two end labels used to be re-anchored instead (no transform at the start, a full
+   translate at the end) so their text could not overflow the legend. That kept them
+   inside the box, but it also pulled them off their dots: the last label sat entirely
+   to the LEFT of its stop, which is exactly what makes "Max" look misaligned against
+   the dot above it. The legend already spans the stop axis and the labels are short,
+   so plain centring fits — and every label now shares one rule. */
+.dmp-slider-tick[data-edge="start"] { transform: translateX(-50%); margin-left: 0; }
+.dmp-slider-tick[data-edge="end"] { transform: translateX(-50%); margin-left: 0; }
 .dmp-slider-tick:hover:not(:disabled) { color: var(--dsw-alias-label-secondary);
   background: var(--dsw-alias-interactive-bg-hover); }
 .dmp-slider-tick:focus-visible { outline: 2px solid var(--dsw-alias-border-l3); outline-offset: -2px; }
@@ -770,8 +928,7 @@ const CSS = `
    Bolding it made the selected label measurably wider and taller-looking than its
    neighbours, so the labels appeared to change size as the level moved. Keeping one
    weight keeps every label the same box; the accent colour carries the selection. */
-.dmp-slider-tick-active {
-  color: var(--dsw-alias-state-business-primary, var(--dsw-alias-brand-primary)); }
+.dmp-slider-tick-active { color: var(--dmp-accent); }
 .dmp-slider-hint { margin: 5px 0 0; padding-top: 8px;
   border-top: 1px solid var(--dsw-alias-border-l1);
   font-size: 11px; line-height: 15px; color: var(--dsw-alias-label-secondary); }
@@ -787,6 +944,8 @@ const CSS = `
 }
 @media (prefers-reduced-motion: reduce) {
   .dmp-slider-fill, .dmp-slider-thumb { transition: none; }
+  /* The exhaust is decoration: with motion turned down it is simply not drawn. */
+  .dmp-emit { display: none; }
 }
 /* ---------------------------------------------------------------------------
    Rejected-selection notice
@@ -1363,6 +1522,14 @@ function createModelPicker(React) {
         className: 'dmp-panel dmp-panel-slider',
         role: 'dialog',
         'aria-label': t.effortHeading,
+        // The host lifts the composer's stacking context when one of its own menus
+        // is open: `.composerSeat:has([data-trigger-menu]) { z-index: 9 }`. Without
+        // it the seat stays at z-index 7, and the chat's "jump to latest" button
+        // (z-index 8, a sibling of the seat) paints over this panel no matter what
+        // z-index the panel itself asks for — a child cannot escape its parent's
+        // stacking context. Marking the panel is the supported way to ask for the
+        // same lift.
+        'data-trigger-menu': '',
         ref: effortAnchor.panelRef,
         style: effortAnchor.style
       },
@@ -1390,6 +1557,8 @@ function createModelPicker(React) {
       ? h('div', {
         className: 'dmp-panel',
         role: 'listbox',
+        // Same stacking lift as the effort panel: see the comment there.
+        'data-trigger-menu': '',
         ref: modelAnchor.panelRef,
         style: modelAnchor.style
       },

@@ -39,6 +39,37 @@ export function createEffortSlider(React) {
   const CaptionMark = createCaptionMark(React)
   const { useState, useEffect, useRef } = React
 
+  /**
+   * The exhaust table.
+   *
+   * Fixed numbers, never `Math.random()`: a render has to be pure, and the stream
+   * must look identical every time the panel opens.
+   *
+   * `dy0` is what makes the particles leave the knob's whole CROSS-SECTION rather
+   * than one point in its centre — it spreads the spawn points down the knob's
+   * height. `dx` / `dy` / `sz` / `rot` stop the squares from marching in step, and
+   * the per-particle `--i` turns one keyframe into a continuous stream (see the
+   * negative `animation-delay` in the stylesheet).
+   */
+  const EMIT = [
+    { dy0: -11, dx: -58, dy: -3, sz: 4, rot: 0 },
+    { dy0: -7, dx: -74, dy: -5, sz: 3, rot: 45 },
+    { dy0: -3, dx: -62, dy: -1, sz: 5, rot: 0 },
+    { dy0: 1, dx: -88, dy: 2, sz: 3, rot: 90 },
+    { dy0: 5, dx: -66, dy: 4, sz: 4, rot: 0 },
+    { dy0: 9, dx: -80, dy: 6, sz: 3, rot: 45 },
+    { dy0: -9, dx: -92, dy: -6, sz: 3, rot: 90 },
+    { dy0: -5, dx: -54, dy: -2, sz: 4, rot: 0 },
+    { dy0: -1, dx: -70, dy: 0, sz: 3, rot: 45 },
+    { dy0: 3, dx: -84, dy: 3, sz: 4, rot: 0 },
+    { dy0: 7, dx: -60, dy: 5, sz: 3, rot: 90 },
+    { dy0: 11, dx: -76, dy: 7, sz: 3, rot: 0 },
+    { dy0: -8, dx: -68, dy: -4, sz: 4, rot: 45 },
+    { dy0: 0, dx: -90, dy: 1, sz: 3, rot: 0 },
+    { dy0: 6, dx: -52, dy: 4, sz: 4, rot: 90 },
+    { dy0: -2, dx: -78, dy: -1, sz: 3, rot: 0 }
+  ]
+
   return function EffortSlider({ efforts, activeId, disabled, onChange, t, caption }) {
     const count = efforts.length
     const incoming = Math.max(0, efforts.findIndex((effort) => effort.id === activeId))
@@ -72,7 +103,11 @@ export function createEffortSlider(React) {
     const position = (at) => count <= 1 ? '50%' : `${(at / (count - 1)) * 100}%`
 
     return h('div', {
-      className: 'dmp-slider',
+      // `dmp-slider-dragging` drops the left transition on the knob, the fill and
+      // the emitter together. Without it the knob eases to its new stop over 150ms
+      // while a transition-free emitter jumps there at once, so the particles left
+      // from a position the knob had not reached yet.
+      className: `dmp-slider${dragging === null ? '' : ' dmp-slider-dragging'}`,
       'aria-disabled': disabled === true,
       style: { '--dmp-effort-at': position(index) }
     },
@@ -85,6 +120,40 @@ export function createEffortSlider(React) {
         h('span', { className: 'dmp-slider-value' }, activeName)),
 
       h('div', { className: 'dmp-slider-rail' },
+        /**
+         * The rail's outline, drawn as vector art.
+         *
+         * This started as a `box-shadow` inset, which is a RASTER edge: at 1px it
+         * lands on the pixel grid but reads flat, and at 1.5px it falls between
+         * pixels and smears into a grey band. The knob's ring never had that problem
+         * because it is an SVG stroke — a vector edge, crisp at any scale.
+         *
+         * So the outline uses the same primitive as the knob: a `<rect>` with a
+         * stroked edge, sized to the rail and scaled to it by `preserveAspectRatio`
+         * being off. `vector-effect: non-scaling-stroke` keeps the stroke exactly
+         * 1px however the rect is stretched, so the line stays hairline-crisp instead
+         * of being squashed by the horizontal stretch. `rx` is a percentage of the
+         * half-height, matching the rail's own rounded ends.
+         */
+        h('svg', {
+          className: 'dmp-slider-outline',
+          'aria-hidden': true,
+          preserveAspectRatio: 'none'
+        },
+        h('rect', {
+          // Half the stroke on each axis: an SVG stroke straddles the path, so a 2px
+          // line on the exact edge would be half-clipped by the rail's clip-path.
+          x: 1,
+          y: 1,
+          width: 'calc(100% - 2px)',
+          height: 'calc(100% - 2px)',
+          rx: 14,
+          ry: 14,
+          fill: 'none',
+          stroke: 'var(--dsw-alias-border-l3)',
+          strokeWidth: 2,
+          vectorEffect: 'non-scaling-stroke'
+        })),
         /**
          * The moving parts live in an INSET track.
          *
@@ -99,6 +168,28 @@ export function createEffortSlider(React) {
          */
         h('div', { className: 'dmp-slider-track' },
           h('div', { className: 'dmp-slider-fill', 'aria-hidden': true }),
+          /**
+           * The exhaust.
+           *
+           * An empty box pinned at the knob's position (`--dmp-effort-at`), carrying
+           * the particle squares. It is a SIBLING of the knob inside the same inset
+           * track, so it shares the knob's coordinate space and its transition —
+           * which is what keeps the spawn point under the knob while it moves.
+           * The rail's clip-path trims whatever drifts past the end cap.
+           */
+          h('span', { className: 'dmp-emit', 'aria-hidden': true },
+            EMIT.map((particle, at) => h('i', {
+              key: at,
+              className: 'dmp-emit-p',
+              style: {
+                '--i': at,
+                '--dx': `${particle.dx}px`,
+                '--dy0': `${particle.dy0}px`,
+                '--dy': `${particle.dy}px`,
+                '--sz': `${particle.sz}px`,
+                '--rot': `${particle.rot}deg`
+              }
+            }))),
           h('div', { className: 'dmp-slider-dots', 'aria-hidden': true },
             efforts.map((effort, at) => h('span', {
               key: effort.id,
