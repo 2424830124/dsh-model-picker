@@ -494,8 +494,84 @@ assert.ok(texts(openTree).includes('WorkBuddy (Mainland)'), 'groups are labelled
   }
 }
 // ---------------------------------------------------------------------------
-// A provider card folds, and the fold is remembered for the next start.
+// Cards follow the SHIPPED provider order, with the companion plugin pinned first.
 // ---------------------------------------------------------------------------
+// The shipped picker does not list providers in catalogue order: it lifts
+// `deepseek-account` and `deepseek-official` to the top and leaves everything else
+// in registration order (`orderModelProviders`). Reproducing that here keeps the
+// two lists agreeing — a user who learned the order in `/model` sees it again.
+//
+// One addition on top: the provider plugin this picker is built alongside is
+// pinned above both, because its card is the one carrying the live balance, load
+// and sign-in here. That is a deliberate divergence, so it is asserted explicitly
+// rather than left implied by a fixture.
+{
+  const pinned = '@huai_xin/dsh-workbuddy'
+  const orderDirectory = createDirectory({ current: { provider: `${pinned}/cn`, model: 'hy3' } })
+  // Registered in an order that differs from the expected result in every way, so
+  // a test that passed by accident (catalogue order, alphabetical order) fails.
+  orderDirectory.__set({ groups: [
+    { id: 'zeta-labs', name: 'Zeta Labs', models: [{ id: 'z1', name: 'Zeta One' }] },
+    { id: 'deepseek-official', name: 'DeepSeek Official', models: [{ id: 'ds-off', name: 'DS Off' }] },
+    { id: `${pinned}/intl`, name: 'WorkBuddy (Overseas)', models: [{ id: 'hy3', name: 'Hy3' }] },
+    { id: 'alpha-co', name: 'Alpha Co', models: [{ id: 'a1', name: 'Alpha One' }] },
+    { id: 'deepseek-account', name: 'DeepSeek', models: [{ id: 'ds-acc', name: 'DS Acc' }] },
+    { id: `${pinned}/cn`, name: 'WorkBuddy (Mainland)', models: [{ id: 'hy3', name: 'Hy3' }] }
+  ] })
+  const orderMount = mount({ directory: orderDirectory })
+  const orderProps = { ...props, ...orderMount.options.inject('session-1') }
+  hookState.length = 0
+  hookIndex = 0
+  collect(orderMount.component(orderProps)).filter(isTrigger)[0].props.onClick()
+  hookIndex = 0
+
+  // Every read starts the hook cursor over: the mini React replays hooks by index,
+  // so a render that begins mid-sequence reads another hook's slot and the tree
+  // silently comes back in the wrong state.
+  const render = () => {
+    hookIndex = 0
+    return orderMount.component(orderProps)
+  }
+  const cardTitles = () => collect(render())
+    .filter((node) => node.props.role === 'group')
+    .map((node) => node.props['aria-label'])
+
+  assert.deepEqual(cardTitles(), [
+    'WorkBuddy',
+    'DeepSeek',
+    'DeepSeek Official',
+    'Zeta Labs',
+    'Alpha Co'
+  ], 'the pinned package leads, then the shipped two, then the catalogue order — merged cards keep one slot')
+
+  // The pinned package is matched as a PREFIX, so both deployments land in the
+  // same leading card and a third one would too, without an edit to the rule.
+  // Inside the card the tabs keep catalogue order — this rule reorders cards, it
+  // does not reorder the deployments a plugin registered.
+  const lead = collect(render()).filter((node) => node.props.role === 'group')[0]
+  assert.deepEqual(collect(lead)
+    .filter((node) => String(node.props.className ?? '').split(' ').includes('dmp-card-tab'))
+    .map((node) => node.children[0]), ['海外版', '大陆版'],
+  'every deployment of the pinned package is in the leading card')
+
+  // A search narrows the list but must not reshuffle it: the surviving card keeps
+  // its place instead of jumping to the top as the only result.
+  collect(render()).find((node) => node.type === 'input')
+    .props.onChange({ target: { value: 'alpha' } })
+  assert.deepEqual(cardTitles(), ['Alpha Co'],
+    'a single match still reports its provider, so the ordering rule stays observable')
+  collect(render()).find((node) => node.type === 'input')
+    .props.onChange({ target: { value: '' } })
+  assert.deepEqual(cardTitles(), [
+    'WorkBuddy',
+    'DeepSeek',
+    'DeepSeek Official',
+    'Zeta Labs',
+    'Alpha Co'
+  ], 'clearing the query restores the provider order')
+}
+
+
 // A client plugin has no writable Cordis config, so the durable store is the same
 // localStorage the shipped client plugins use for their own UI state (sidebar
 // width, composer drafts). A mount reads the set once; a toggle writes it back.
@@ -515,7 +591,10 @@ assert.ok(texts(openTree).includes('WorkBuddy (Mainland)'), 'groups are labelled
     hookIndex = 0
     const foldTree = foldMount.component(foldProps)
     const card = collect(foldTree).find((node) => node.props.role === 'group')
-    assert.equal(card.props['aria-label'], 'WorkBuddy (Mainland)', 'the first card is the first provider')
+    // The shipped order, not the catalogue's: `deepseek-account` leads here
+    // because this fixture's other provider is not under a pinned package. The
+    // ordering rule itself is pinned in its own block below.
+    assert.equal(card.props['aria-label'], 'DeepSeek', 'the first card follows the provider order')
 
     const toggle = collect(card).find((node) => node.type === 'button' && node.props['aria-expanded'] === true)
     assert.ok(toggle, 'an open card exposes a fold control')

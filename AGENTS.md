@@ -20,6 +20,7 @@ src/
   client.js          入口：模块注册 + 插件对象 + 槽位注册
   core/
     rank.js          搜索排序：官方 rankByName 的 vendored 副本
+    order.js         供应商卡片顺序：官方 orderModelProviders + 本插件的置顶规则
   ui/
     ModelPicker.js   组件：触发器 + 模型面板 + 档位面板 + 失败提示框
     EffortSlider.js  档位滑杆（自绘轨道 + 隐藏的原生 range input）+ `tierFor`
@@ -464,6 +465,18 @@ CSS 选择器够不着；所以 `ModelPicker` 自己算一遍挂到按钮上。�
   在 V3.10 前）+ `sensitivity: 'base'`（大小写不影响顺序），**按 section 各排一次**，两个部署的标签
   逐行对齐。有搜索词时保留 `rankByName` 的相关性顺序，不重排。（目录顺序是 provider 注册的顺序，
   两个部署各自注册，同一模型在两个标签里高度不同——那才是问题。）
+- **卡片的顺序不是目录顺序，是官方选择器的顺序**（`orderByProvider`，`src/core/order.js`）：
+  `deepseek-account` → `deepseek-official` → 其余保持注册顺序，和官方
+  `ui-model-selection` 的 `orderModelProviders` 一致（那份源码在
+  `@deepseek-ai/dsh-client-ui-model-selection/lib/client.js`，注意它用的是 `toSorted`）。
+  **在此之上再钉一条本仓库自己的规则：`@huai_xin/dsh-workbuddy` 的卡片固定置顶，排在官方两者之前**
+  ——那张卡是本插件唯一带实时余额、负载和登录入口的卡，用户来这个列表首先看它。pinned 判定走
+  **id 前缀**（`id === PINNED_PROVIDER || id.startsWith(PINNED_PROVIDER + '/')`），所以 `/cn`、`/intl`
+  和将来第三个部署都自动归入同一张置顶卡，不需要改规则。
+  排序作用在**卡片层**（`cards` 的 key，即 `cardKeyOf` 的结果），所以合并卡只占一个位置；平局用
+  数组下标显式打破，**不依赖引擎的排序稳定性**——"其余保持原序"是复刻契约的一部分。
+  `stateOnlySections` 补出来的零模型卡走同一条规则（它就是一张卡，没有理由在排序里例外）。
+  **搜索时也按这个顺序**，不要改成"命中的排前面"：卡片在查询变化时跳位置比顺序不完美更糟。
 - **状态没到之前先占位，别留空。** 快照是异步的，首帧若什么都不画，行会在半秒后"长"出圆点和倍率。
   所以部署还在加载时：行尾显示**未知**（弱化色）、行首画**灰点**（tooltip 也是"未知"）、账户行显示
   **积分 加载中…**。判断"在加载"用的是 `stateAvailable`（服务返回了对象、只是 `providers` 为空）——

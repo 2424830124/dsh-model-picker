@@ -1,4 +1,5 @@
 import { rankByName } from '../core/rank.js'
+import { orderByProvider } from '../core/order.js'
 import { Chevron } from './Chevron.js'
 import { Refresh } from './Refresh.js'
 import { createAnchoredPanel } from './anchor.js'
@@ -449,7 +450,11 @@ export function createModelPicker(React) {
      * of the provider id puts them under one card with a section each, while a
      * pick still carries the exact provider id it came from.
      *
-     * Order follows the catalogue: a card keeps the position of its first section.
+     * The cards are then ordered by provider, not by the catalogue: the shipped
+     * picker lifts `deepseek-account` / `deepseek-official` to the top and leaves
+     * the rest in registration order (`orderModelProviders`), and this plugin pins
+     * its own companion provider above both. See `core/order.js` — the ranking
+     * lives there so the model list and the shipped menus agree.
      */
     /**
      * Live provider state, when the matching provider plugin publishes it.
@@ -524,7 +529,9 @@ export function createModelPicker(React) {
         }
         card.sections.push(entry)
       }
-      return order
+      // Provider order, not catalogue order — and it holds while searching too, so
+      // a card does not jump around as the query narrows the list to it.
+      return orderByProvider(order, (card) => card.key)
     }, [filtered, stateOnlySections])
 
     const busyWord = (busy) => busy === 'idle' ? t.busyIdle
