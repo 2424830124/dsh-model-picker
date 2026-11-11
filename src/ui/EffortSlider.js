@@ -433,7 +433,6 @@ export function createEffortSlider(React) {
           className: `dmp-slider-tick${at === index ? ' dmp-slider-tick-active' : ''}`,
           disabled: disabled === true,
           'aria-pressed': at === index,
-          'data-edge': count <= 1 ? undefined : at === 0 ? 'start' : at === count - 1 ? 'end' : undefined,
           title: effort.name ?? effort.id,
           style: { left: position(at) },
           onClick: () => onChange(effort.id)

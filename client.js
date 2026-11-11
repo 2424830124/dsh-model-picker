@@ -899,7 +899,6 @@ function createEffortSlider(React) {
           className: `dmp-slider-tick${at === index ? ' dmp-slider-tick-active' : ''}`,
           disabled: disabled === true,
           'aria-pressed': at === index,
-          'data-edge': count <= 1 ? undefined : at === 0 ? 'start' : at === count - 1 ? 'end' : undefined,
           title: effort.name ?? effort.id,
           style: { left: position(at) },
           onClick: () => onChange(effort.id)
@@ -912,9 +911,10 @@ function createEffortSlider(React) {
 /**
  * The picker's stylesheet.
  *
- * Host theme tokens only, plus the two composer variables the row sets when its
- * controls no longer fit on one line. Every class is prefixed dmp- so a copied
- * host pattern can never collide with the host's own rules.
+ * Host theme tokens only. Every class is prefixed dmp- so a copied host pattern
+ * can never collide with the host's own rules. The only variables this sheet sets
+ * for someone else to read are --dmp-notice-lift (measured by ModelPicker) and the
+ * two --dsh-scrollbar-* the host's own scrollbar consumes on the list box.
  *
  * Sizing follows the shipped menu rather than inventing its own scale: the panel
  * is max-content wide (so a short list stays narrow instead of stretching to a
@@ -943,9 +943,6 @@ const CSS = `
 /* One popover anchor per control: the model list and the level list open above
    their own button and never overlap each other. */
 .dmp-control { position: relative; display: flex; align-items: center; min-width: 0; }
-/* The model tag keeps a stable box too, for the same reason: switching models must
-   not move the level tag beside it. It is capped rather than fixed so a long model
-   name still gets room, but the cap is what the layout reserves. */
 /* FIXED width, not content-sized.
  *
  * A content-sized button meant the whole control row changed width with every
@@ -966,23 +963,19 @@ const CSS = `
    the whole composer row shift every time the level changed — and pushed the
    model button sideways with it. A fixed box keeps both controls still.
 
-   The width is sized to the longest name a provider is likely to send: "Medium"
-   measures ~50px at 12px/600, and the earlier 74px box only left 44px for text,
-   so it rendered as "Medi…". 92px leaves 56px, which also covers "Extreme" and
-   "Minimal".
+   The width is 80px, sized to the longest name a provider is likely to send
+   ("Medium", "X-High"); a longer one truncates rather than growing the row.
 
    The label is CENTRED in the button, which needs the caret out of the flex flow:
-   a normal flex child reserves 18px on the right only, so centring the label in
-   what was left pushed it ~7px left of the button's true centre. Absolutely
-   positioning the caret and giving the button 18px padding on BOTH sides makes
-   the label's own box symmetric, so text-align: center lands on the button's
-   centre. 18px is exactly the caret's own width (14px) plus its 4px inset, which
-   also stops a long label from running underneath it.
+   a normal flex child would reserve room on the right only, so centring the label
+   in what was left would push it off the button's true centre. Absolutely
+   positioning the caret (right: 0) and padding the button asymmetrically
+   (18px right for the caret's 14px width, 12px left) makes the label's own box
+   symmetric enough that text-align: center lands on the centre.
    The caret keeps its transform free for the open-state rotation by centring
    with margin-top instead of translateY. */
 .dmp-trigger-effort { position: relative; width: 80px; box-sizing: border-box;
-  padding: 0 18px 0 12px; font-size: 12px; font-weight: 600;
-  color: var(--dsw-alias-label-secondary); }
+  padding: 0 18px 0 12px; font-size: 12px; font-weight: 600; }
 /* The caret sits flush against the right edge and the label box is padded away
    from it, so the two read as separate elements instead of touching. */
 .dmp-trigger-effort > .dmp-chevron { position: absolute; right: 0; top: 50%;
@@ -1012,10 +1005,9 @@ const CSS = `
    and matches the model tag beside it. */
 .dmp-trigger-effort:hover:not(:disabled),
 .dmp-trigger-effort[aria-expanded="true"] {
-  background: var(--dsw-alias-interactive-bg-hover, var(--dsw-alias-interactive-bg-active));
-  color: var(--dsw-alias-label-primary); }
+  background: var(--dsw-alias-interactive-bg-hover, var(--dsw-alias-interactive-bg-active)); }
 .dmp-trigger-effort:focus-visible { outline: 2px solid var(--dsw-alias-border-l2); outline-offset: 2px; }
-.dmp-trigger:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.12)); }
+.dmp-trigger:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
 .dmp-trigger:disabled { color: var(--dsw-alias-label-dimmed, var(--dsw-alias-state-idle-primary)); cursor: default; }
 .dmp-trigger-text { display: var(--dsh-composer-model-text-display, block);
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -1034,7 +1026,14 @@ const CSS = `
   border: 1px solid var(--dsw-alias-border-l1); border-radius: var(--dsw-radius-lg, 10px);
   background: var(--dsw-alias-bg-module-platform, var(--dsw-alias-bg-layer-1));
   box-shadow: var(--dsw-elevation-panel, var(--dsw-shadow-lv3));
-  color: var(--dsw-alias-label-primary); overflow: hidden; }
+  color: var(--dsw-alias-label-primary); overflow: hidden;
+  /* The level names are Latin and take the host's own brand face, Montserrat, which
+     the theme plugin already ships at 300/400/500 — no download, and it matches the
+     host's headings. The CJK copy has no glyphs there and falls through to the
+     platform UI face, which is what the host uses for body text. Sizes stay with
+     each element so a host font-size change still reaches this control. */
+  font-family: Montserrat, var(--dsw-font-family-sans, system-ui, -apple-system,
+    'Segoe UI', 'Microsoft YaHei UI', 'Microsoft YaHei', sans-serif); }
 .dmp-search { flex: none; padding: 0 0 4px; }
 .dmp-search input { width: 100%; box-sizing: border-box; padding: 5px 7px; font: inherit; font-size: 12.5px;
   color: var(--dsw-alias-label-primary); background: transparent;
@@ -1071,9 +1070,9 @@ const CSS = `
   border-radius: var(--dsw-radius-lg, 10px);
   background: var(--dsw-alias-bg-layer-1); overflow: hidden; }
 .dmp-card + .dmp-card { margin-top: 6px; }
-/* The header is the fold control. It is a button unless a search is running, in
- * which case the component renders the same box as a plain div — hence the
- * button-only cursor/hover rules instead of one shared hover. */
+/* The header row is always a plain div; the fold control INSIDE it is a button,
+ * and while a search is running it degrades to a div — hence the button-only
+ * cursor/hover rules instead of one shared hover. */
 .dmp-card-head { display: flex; align-items: center; gap: 6px;
   width: 100%; box-sizing: border-box; padding: 7px 9px 3px;
   border: 0; background: transparent; text-align: left; font: inherit;
@@ -1115,12 +1114,10 @@ button.dmp-card-chevron:hover { color: var(--dsw-alias-label-secondary); }
  * border; the bottom padding closes the card under the last row. */
 .dmp-card-body { padding: 0 3px 3px; }
 /* A card can hold several providers when one plugin registers them under a single
- * package (two deployments of one product). Each gets a small label; the shared
- * title already said the rest. */
-/* A card can hold several providers when one plugin registers them under a single
- * package. They are TABS, not stacked sections: the provider panel does the same,
- * and stacking two near-identical model lists doubles the height for a difference
- * nobody reads twice. The active tab is underlined with the shared accent. */
+ * package — two deployments of one product. They are TABS, not stacked sections:
+ * the provider panel does the same, and stacking two near-identical model lists
+ * doubles the height for a difference nobody reads twice. The active tab is
+ * underlined with the shared accent. */
 /* Two columns, one per deployment. Each column is a tab label, the account line
  * under it, and the accent underline spanning the column — the shape the provider
  * panel uses, so a plate of "大陆版 / 海外版" reads the same in both places. */
@@ -1130,9 +1127,7 @@ button.dmp-card-chevron:hover { color: var(--dsw-alias-label-secondary); }
 .dmp-card-tabcol { position: relative; display: flex; flex-direction: column;
   align-items: center; gap: 2px; padding-bottom: 6px; }
 .dmp-card-tabcol-active::after { content: ''; position: absolute; left: 0; right: 0; bottom: -1px;
-  height: 2px; border-radius: 1px;
-  background: var(--dmp-accent,
-    var(--dsw-static-deepseek-450, var(--dsw-alias-state-business-primary))); }
+  height: 2px; border-radius: 1px; background: var(--dmp-accent); }
 .dmp-card-tab { width: 100%; padding: 3px 0 2px; border: 0; background: transparent;
   text-align: center; font: inherit; font-size: 13px; letter-spacing: .02em; cursor: pointer;
   color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary)); }
@@ -1146,8 +1141,7 @@ button.dmp-card-chevron:hover { color: var(--dsw-alias-label-secondary); }
    button: it is the one thing on this header that asks to be pressed. */
 .dmp-card-login { padding: 1px 10px; border: 0; border-radius: 4px; cursor: pointer;
   font: inherit; font-size: 10.5px; font-weight: 600; color: #fff;
-  background: var(--dmp-accent,
-    var(--dsw-static-deepseek-450, var(--dsw-alias-state-business-primary))); }
+  background: var(--dmp-accent); }
 .dmp-card-login:hover:not(:disabled) { filter: brightness(1.08); }
 .dmp-card-login:disabled { opacity: .6; cursor: default; }
 .dmp-card-refresh { display: inline-flex; align-items: center; justify-content: center;
@@ -1166,15 +1160,12 @@ button.dmp-card-chevron:hover { color: var(--dsw-alias-label-secondary); }
   min-height: 34px; padding: 5px 7px; border: 0; border-radius: var(--dsw-radius-md, 8px);
   background: transparent; cursor: pointer; text-align: left;
   color: var(--dsw-alias-label-primary); font: inherit; font-size: 12.5px; }
-.dmp-item:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.12)); }
+.dmp-item:hover { background: var(--dsw-alias-interactive-bg-hover); }
 /* The selected model keeps one colour in both themes: the accent is the static
-   ramp step, not a theme alias (see --dmp-accent above). The fallback repeats the
-   chain so the row still reads as selected if the variable is ever missing — the
-   accent is declared on .dmp-root, and a panel rendered outside it would otherwise
-   fall back to plain label text and lose the only colour cue. */
-.dmp-item-current { color: var(--dmp-accent,
-    var(--dsw-static-deepseek-450, var(--dsw-alias-state-business-primary)));
-  font-weight: 600; }
+   ramp step declared once on .dmp-root, not a theme alias. Everything that renders
+   inside .dmp-root inherits that declaration, so the rules below just read the
+   variable instead of repeating its fallback chain. */
+.dmp-item-current { color: var(--dmp-accent); font-weight: 600; }
 .dmp-item-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; }
 /* Row decoration from a provider plugin's published state, in that panel's own
@@ -1186,14 +1177,17 @@ button.dmp-card-chevron:hover { color: var(--dsw-alias-label-secondary); }
 .dmp-item-dot[data-tone="idle"] { background: var(--dsw-alias-state-success-primary); }
 .dmp-item-dot[data-tone="busy"] { background: var(--dsw-alias-state-warn-primary); }
 .dmp-item-dot[data-tone="congested"] { background: var(--dsw-alias-state-error-primary); }
-.dmp-item-dot[data-tone="unknown"] { background: var(--dsw-alias-state-idle-primary); }
+/* data-tone="unknown" needs no rule: the base colour above IS the unknown grey. */
 .dmp-item-tail { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; font-size: 11px; line-height: 17px; font-variant-numeric: tabular-nums;
   color: var(--dsw-alias-label-secondary); }
 .dmp-item-tail-rate { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
-/* Nothing published yet: the slot keeps its width and says "unknown" instead of
-   being absent, so the row does not grow a chip a second after it appears. */
+/* Nothing published yet: the slot says "unknown" instead of being absent, so the
+   row does not grow a chip a second after it appears. Its width still follows the
+   text — there is no fixed box behind it. */
 .dmp-item-tail-pending { color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary)); }
+/* .dmp-card-credits is a marker class with no rule of its own: the account line it
+   sits in already carries size and colour, and only the pending state differs. */
 .dmp-card-credits-pending { color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary)); }
 /* A deployment that publishes no models yet — signed out, or signed in while the
    catalogue catches up. Says so instead of leaving a blank body. */
@@ -1205,8 +1199,7 @@ button.dmp-card-chevron:hover { color: var(--dsw-alias-label-secondary); }
  * bad without three hand-picked backgrounds. */
 .dmp-item-tail-pill { padding: 0 7px; border-radius: 999px; font-weight: 500;
   background: color-mix(in srgb, currentColor 14%, transparent); }
-.dmp-item-tail-accent { color: var(--dmp-accent,
-    var(--dsw-static-deepseek-450, var(--dsw-alias-state-business-primary))); }
+.dmp-item-tail-accent { color: var(--dmp-accent); }
 .dmp-item-tail-bad { color: var(--dsw-alias-state-error-primary); }
 .dmp-item-tail-warn { color: var(--dsw-alias-state-warn-primary); }
 .dmp-item-tail-muted { color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary)); }
@@ -1224,21 +1217,11 @@ button.dmp-card-chevron:hover { color: var(--dsw-alias-label-secondary); }
 .dmp-panel-slider { width: max-content; box-sizing: border-box;
   min-width: min(322px, 100vw - 32px); max-width: min(374px, 100vw - 32px);
   padding: 17px 19px 15px; border-radius: var(--dsw-radius-lg, 12px); }
-/* The type stack, in two parts.
- *
- * The level names are Latin ("Low", "Medium", "X-High") and get the host's own
- * brand face, Montserrat, which the theme plugin already ships at 300/400/500 —
- * so this costs no download and matches the host's own headings. The CJK copy
- * ("思考强度", the hint line) has no glyphs in Montserrat, so the stack falls
- * through to the platform UI face, which is what the host uses for body text.
- *
- * Nothing here sets a size: that stays with each element, so a host font-size
- * change still reaches this control. The slider inherits this from the panel it is
- * always rendered inside, so it is not named here. */
-.dmp-panel {
-  font-family: Montserrat, var(--dsw-font-family-sans, system-ui, -apple-system,
-    'Segoe UI', 'Microsoft YaHei UI', 'Microsoft YaHei', sans-serif); }
-.dmp-slider { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.dmp-slider { display: flex; flex-direction: column; gap: 7px; min-width: 0;
+  /* Geometry shared by the rail, the stop axis, the knob and the native range.
+     The two stop offsets are deliberately asymmetric — see the rail note below. */
+  --dmp-rail-height: 28px; --dmp-thumb-size: 28px;
+  --dmp-stop-left: 28px; --dmp-stop-right: 16px; }
 .dmp-slider-head { display: flex; align-items: center; gap: 14px; margin-bottom: 5px; }
 /* The heading is vector art, not text: see CaptionMark.js for why. It only needs a
    colour — which it takes from the theme token below through currentColor — and a
@@ -1275,9 +1258,10 @@ button.dmp-card-chevron:hover { color: var(--dsw-alias-label-secondary); }
    thick track is what makes the control legible at a glance — a hairline rail with
    a small dot reads as a status indicator, not something you can drag.
 
-   The fill and the active label take the host's business-primary token — the same
-   accent DSH uses for its own interactive highlights — so the control recolours
-   with the theme instead of carrying a blue that only suits one of them. */
+   The fill, the active label and the value pill all read --dmp-accent. On the two
+   highest levels that variable is rewritten to a fixed violet/amber (below); every
+   other level keeps the STATIC blue ramp step declared on .dmp-root, which is why
+   the control looks the same in both themes instead of following a theme alias. */
 /* The knob is the rail's full height (28px). Both ends keep the knob clear of the
    rail's cap, but by DIFFERENT amounts — that asymmetry is the requested behaviour,
    not an oversight:
@@ -1290,8 +1274,6 @@ button.dmp-card-chevron:hover { color: var(--dsw-alias-label-secondary); }
    rather than as a stop. The dots, the labels, the fill and the native input's
    travel all derive from these two numbers, which is why they are variables rather
    than four copies of the same value. */
-.dmp-slider { --dmp-rail-height: 28px; --dmp-thumb-size: 28px;
-  --dmp-stop-left: 28px; --dmp-stop-right: 16px; }
 /* The two top levels get their own accent.
    Borrowed from Codex's TUI, which reserves colour for its highest tiers rather than
    painting a ramp across every stop: its Ultra is a violet family and its Max is an
@@ -1486,11 +1468,13 @@ button.dmp-card-chevron:hover { color: var(--dsw-alias-label-secondary); }
 .dmp-slider-rail:has(.dmp-slider-input:focus-visible) .dmp-slider-thumb {
   box-shadow: 0 0 0 3px color-mix(in srgb,
     var(--dmp-accent) 35%, transparent); }
-/* The range input spans from the first stop's reach to the rail's right edge, and
-   its native thumb is the knob's size. That makes its invisible thumb's centre
-   travel exactly from --dmp-stop-left to (width - stop-right) — the same axis the
-   knob is drawn on. Spanning the full rail instead would start the travel one
-   radius short of the first stop, and the pointer would disagree with the knob. */
+/* The range input spans from one knob radius left of the first stop to the rail's
+   right edge, and its native thumb is the knob's size. Its invisible thumb centre
+   therefore runs from --dmp-stop-left to (width - thumb/2), i.e. the LEFT end
+   matches the drawn knob exactly and the RIGHT end sits ~2px short of
+   --dmp-stop-right. That slack is intentional: it is well inside the pointer's own
+   tolerance, and stretching the box to close it would drag the left end off the
+   first stop — the end the eye actually checks. */
 .dmp-slider-input { position: absolute; z-index: 6; top: 0;
   left: calc(var(--dmp-stop-left) - var(--dmp-thumb-size) / 2);
   width: calc(100% - var(--dmp-stop-left) + var(--dmp-thumb-size) / 2);
@@ -1530,17 +1514,14 @@ button.dmp-card-chevron:hover { color: var(--dsw-alias-label-secondary); }
      cross-fade instead of blinking. Hover still answers quickly through the faster
      background transition. */
   transition: color .3s ease, background-color .15s ease; }
-/* Every label is centred on its stop.
-   The two end labels used to be re-anchored instead (no transform at the start, a full
+/* Every label is centred on its stop, including the two ends.
+   The end labels used to be re-anchored instead (no transform at the start, a full
    translate at the end) so their text could not overflow the legend. That kept them
    inside the box, but it also pulled them off their dots: the last label sat entirely
    to the LEFT of its stop, which is exactly what makes "Max" look misaligned against
    the dot above it. The legend already spans the stop axis and the labels are short,
-   so plain centring fits — and every label now shares one rule. */
-.dmp-slider-tick[data-edge="start"] { transform: translateX(-50%); margin-left: 0; }
-.dmp-slider-tick[data-edge="end"] { transform: translateX(-50%); margin-left: 0; }
-.dmp-slider-tick:hover:not(:disabled) { color: var(--dsw-alias-label-secondary);
-  background: var(--dsw-alias-interactive-bg-hover); }
+   so plain centring fits for all of them. */
+.dmp-slider-tick:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
 .dmp-slider-tick:focus-visible { outline: 2px solid var(--dsw-alias-border-l3); outline-offset: -2px; }
 .dmp-slider-tick:disabled { cursor: default; }
 /* The active label is marked by COLOUR only, not weight.
@@ -1633,8 +1614,6 @@ const DICT = {
     rateFree: '免费',
     rateUnknown: '未知',
     busyIdle: '空闲',
-    busyBusy: '繁忙',
-    busyCongested: '拥堵',
     /* The wording a tooltip uses: the two-character labels drop the degree that
        the dot's colour already carries, a tooltip can afford to say it. */
     busyBusyDetail: '轻微拥堵',
@@ -1666,13 +1645,11 @@ const DICT = {
      * into 可用 — a new verdict should look odd, not lie.
      */
     verdict: {
-      available: '可用',
       unusable: '不可用',
       'no permission': '无权限',
       'credentials rejected': '凭据失效',
       'out of credits': '积分不足',
-      'rate limited': '限流',
-      unknown: '未知'
+      'rate limited': '限流'
     }
   },
   en: {
@@ -1691,8 +1668,6 @@ const DICT = {
     rateFree: 'Free',
     rateUnknown: 'Unknown',
     busyIdle: 'Idle',
-    busyBusy: 'Busy',
-    busyCongested: 'Congested',
     busyBusyDetail: 'Slightly congested',
     busyCongestedDetail: 'Heavily congested',
     regionCn: 'Mainland',
@@ -1707,13 +1682,11 @@ const DICT = {
     login: 'Sign in',
     loginPending: 'Signing in…',
     verdict: {
-      available: 'Available',
       unusable: 'Unusable',
       'no permission': 'No permission',
       'credentials rejected': 'Credentials rejected',
       'out of credits': 'Out of credits',
-      'rate limited': 'Rate limited',
-      unknown: 'Unknown'
+      'rate limited': 'Rate limited'
     }
   }
 }
@@ -1806,6 +1779,15 @@ const CARD_ACCENTS = {
 }
 
 /**
+ * The empty published-state map, shared by every read that finds none.
+ *
+ * A fresh `{}` per render would break the identity of the value the card list is
+ * memoised against, so a composition with no state-publishing plugin would rebuild
+ * — and so re-render — the whole list on every keystroke in the search box.
+ */
+const NO_PROVIDERS = {}
+
+/**
  * The card a provider belongs to.
  *
  * Providers registered by the SAME plugin share a package prefix in their id
@@ -1823,6 +1805,82 @@ const CARD_ACCENTS = {
 function cardKeyOf(providerId) {
   const at = String(providerId ?? '').lastIndexOf('/')
   return at > 0 ? providerId.slice(0, at) : providerId
+}
+
+/**
+ * The order the deployments inside one card are listed in.
+ *
+ * A card's sections used to appear in whatever order they were ENCOUNTERED, which
+ * is not the order the plugin registered them in. The catalogue drops a provider
+ * that offers no model right now, and `stateOnlySections` appends what it dropped
+ * at the END — so a deployment with nothing callable at that moment slid to the
+ * right, and because the first section is also the one a card opens on, the card
+ * silently opened on the other deployment as well. The two WorkBuddy deployments
+ * therefore swapped places whenever the mainland one ran out of callable models.
+ *
+ * The region token is the stable key, and it is the same two tokens `regionLabel`
+ * already translates: mainland first, overseas second. That is a TOKEN
+ * vocabulary, not a provider whitelist — this file still knows no plugin by name.
+ * A deployment whose region is neither (or that has no region at all, the ordinary
+ * single-provider case) keeps its incoming order.
+ */
+const REGION_ORDER = ['cn', 'intl']
+
+/**
+ * Which deployment a provider is, read from its published state or from its id.
+ *
+ * `region` from the published snapshot is authoritative, but it arrives
+ * asynchronously — the first frames of the panel would then name the tab from the
+ * English display name and relabel it a moment later, which reads as a language
+ * flip, and the tab order would follow state instead of leading it. The provider
+ * id carries the same token synchronously (`…/cn`, `…/intl`), so the id is the
+ * immediate source and the snapshot only has to agree with it.
+ *
+ * Lives at module scope because both the tab ORDER and the tab LABEL need it, and
+ * the order is decided where the cards are built — before the component's later
+ * locals exist.
+ *
+ * @param group - a catalogue group.
+ * @param providerState - the published per-provider state, possibly empty.
+ * @returns the region token, or undefined for a provider that is not a deployment.
+ */
+function regionOfGroup(group, providerState) {
+  const published = providerState?.[group?.id]?.region
+  if (typeof published === 'string' && published.length > 0) return published
+  const id = String(group?.id ?? '')
+  const at = id.lastIndexOf('/')
+  return at > 0 ? id.slice(at + 1) : undefined
+}
+
+/**
+ * How early a deployment is listed inside its card: lower is earlier.
+ *
+ * @param group - a catalogue group.
+ * @param providerState - the published per-provider state, possibly empty.
+ * @returns the rank; an unknown region ranks with the rest.
+ */
+function deploymentRank(group, providerState) {
+  const at = REGION_ORDER.indexOf(regionOfGroup(group, providerState))
+  return at === -1 ? REGION_ORDER.length : at
+}
+
+/**
+ * List one card's sections in the deployment order.
+ *
+ * Ties keep their incoming order — stated with the original index rather than
+ * left to the engine's stability, the same way `orderByProvider` does it: "the
+ * order the plugin registered is preserved" is part of the contract, not an
+ * implementation detail. A copy is returned; the caller's array is untouched.
+ *
+ * @param sections - the card's sections, in encounter order.
+ * @param providerState - the published per-provider state, possibly empty.
+ * @returns a new array, mainland deployment first.
+ */
+function orderSections(sections, providerState) {
+  return sections
+    .map((section, index) => ({ section, index, rank: deploymentRank(section.group, providerState) }))
+    .sort((left, right) => left.rank - right.rank || left.index - right.index)
+    .map((entry) => entry.section)
 }
 
 /** Longest common prefix of two strings, used to name a merged card. */
@@ -2194,7 +2252,7 @@ function createModelPicker(React) {
      * then by model id — both match the catalogue verbatim, so no lookup table.
      */
     const stateSnapshot = useSnapshot(props.modelStateSource)
-    const providerState = stateSnapshot?.providers ?? {}
+    const providerState = stateSnapshot?.providers ?? NO_PROVIDERS
     /**
      * Whether ANY provider plugin publishes state in this composition.
      *
@@ -2258,15 +2316,16 @@ function createModelPicker(React) {
         }
         card.sections.push(entry)
       }
+      // A card's deployments are listed by REGION, not by encounter order: the
+      // zero-model append above is what perturbs the encounter order (see
+      // REGION_ORDER). This runs inside the card only — it never reorders the
+      // cards themselves, and a provider that is not a deployment keeps its place.
+      for (const card of order) card.sections = orderSections(card.sections, providerState)
       // Provider order, not catalogue order — and it holds while searching too, so
       // a card does not jump around as the query narrows the list to it.
       return orderByProvider(order, (card) => card.key)
-    }, [filtered, stateOnlySections])
+    }, [filtered, stateOnlySections, providerState])
 
-    const busyWord = (busy) => busy === 'idle' ? t.busyIdle
-      : busy === 'busy' ? t.busyBusy
-        : busy === 'congested' ? t.busyCongested
-          : t.rateUnknown
     /**
      * The tooltip's wording: the dot's colour already says how bad it is, so the
      * label spells it out — the degree the panel's own tooltip names, which the
@@ -2633,22 +2692,12 @@ function createModelPicker(React) {
         }, h(Refresh, { h, spinning: working })))
     }
     /**
-     * Which deployment a provider is, read from the id when state is still in flight.
+     * Which deployment a provider is, bound to this render's published state.
      *
-     * `region` from the published snapshot is authoritative, but it arrives
-     * asynchronously — the first frames of the panel would then name the tab from
-     * the English display name and relabel it a moment later, which reads as a
-     * language flip. The provider id carries the same token synchronously
-     * (`…/cn`, `…/intl`), so the id is used as the immediate source and the
-     * snapshot only has to agree with it.
+     * The rule itself is at module scope (`regionOfGroup`) because the tab ORDER
+     * needs it too, and that is decided before this point in the component.
      */
-    const regionOf = (group) => {
-      const published = providerState?.[group.id]?.region
-      if (typeof published === 'string' && published.length > 0) return published
-      const id = String(group.id ?? '')
-      const at = id.lastIndexOf('/')
-      return at > 0 ? id.slice(at + 1) : undefined
-    }
+    const regionOf = (group) => regionOfGroup(group, providerState)
     const regionLabel = (region) => region === 'cn' ? t.regionCn
       : region === 'intl' ? t.regionIntl
         : undefined

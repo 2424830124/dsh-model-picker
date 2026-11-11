@@ -8,7 +8,7 @@
  * Only keys the component actually reads belong here: an entry nobody looks up
  * is a string that silently rots, and a reviewer cannot tell it is dead.
  */
-export const DICT = {
+const DICT = {
   'zh-CN': {
     placeholder: '搜索模型',
     empty: '没有匹配的模型',
@@ -25,8 +25,6 @@ export const DICT = {
     rateFree: '免费',
     rateUnknown: '未知',
     busyIdle: '空闲',
-    busyBusy: '繁忙',
-    busyCongested: '拥堵',
     /* The wording a tooltip uses: the two-character labels drop the degree that
        the dot's colour already carries, a tooltip can afford to say it. */
     busyBusyDetail: '轻微拥堵',
@@ -58,13 +56,11 @@ export const DICT = {
      * into 可用 — a new verdict should look odd, not lie.
      */
     verdict: {
-      available: '可用',
       unusable: '不可用',
       'no permission': '无权限',
       'credentials rejected': '凭据失效',
       'out of credits': '积分不足',
-      'rate limited': '限流',
-      unknown: '未知'
+      'rate limited': '限流'
     }
   },
   en: {
@@ -83,8 +79,6 @@ export const DICT = {
     rateFree: 'Free',
     rateUnknown: 'Unknown',
     busyIdle: 'Idle',
-    busyBusy: 'Busy',
-    busyCongested: 'Congested',
     busyBusyDetail: 'Slightly congested',
     busyCongestedDetail: 'Heavily congested',
     regionCn: 'Mainland',
@@ -99,13 +93,11 @@ export const DICT = {
     login: 'Sign in',
     loginPending: 'Signing in…',
     verdict: {
-      available: 'Available',
       unusable: 'Unusable',
       'no permission': 'No permission',
       'credentials rejected': 'Credentials rejected',
       'out of credits': 'Out of credits',
-      'rate limited': 'Rate limited',
-      unknown: 'Unknown'
+      'rate limited': 'Rate limited'
     }
   }
 }

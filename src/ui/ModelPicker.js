@@ -77,6 +77,15 @@ const CARD_ACCENTS = {
 }
 
 /**
+ * The empty published-state map, shared by every read that finds none.
+ *
+ * A fresh `{}` per render would break the identity of the value the card list is
+ * memoised against, so a composition with no state-publishing plugin would rebuild
+ * — and so re-render — the whole list on every keystroke in the search box.
+ */
+const NO_PROVIDERS = {}
+
+/**
  * The card a provider belongs to.
  *
  * Providers registered by the SAME plugin share a package prefix in their id
@@ -94,6 +103,82 @@ const CARD_ACCENTS = {
 function cardKeyOf(providerId) {
   const at = String(providerId ?? '').lastIndexOf('/')
   return at > 0 ? providerId.slice(0, at) : providerId
+}
+
+/**
+ * The order the deployments inside one card are listed in.
+ *
+ * A card's sections used to appear in whatever order they were ENCOUNTERED, which
+ * is not the order the plugin registered them in. The catalogue drops a provider
+ * that offers no model right now, and `stateOnlySections` appends what it dropped
+ * at the END — so a deployment with nothing callable at that moment slid to the
+ * right, and because the first section is also the one a card opens on, the card
+ * silently opened on the other deployment as well. The two WorkBuddy deployments
+ * therefore swapped places whenever the mainland one ran out of callable models.
+ *
+ * The region token is the stable key, and it is the same two tokens `regionLabel`
+ * already translates: mainland first, overseas second. That is a TOKEN
+ * vocabulary, not a provider whitelist — this file still knows no plugin by name.
+ * A deployment whose region is neither (or that has no region at all, the ordinary
+ * single-provider case) keeps its incoming order.
+ */
+const REGION_ORDER = ['cn', 'intl']
+
+/**
+ * Which deployment a provider is, read from its published state or from its id.
+ *
+ * `region` from the published snapshot is authoritative, but it arrives
+ * asynchronously — the first frames of the panel would then name the tab from the
+ * English display name and relabel it a moment later, which reads as a language
+ * flip, and the tab order would follow state instead of leading it. The provider
+ * id carries the same token synchronously (`…/cn`, `…/intl`), so the id is the
+ * immediate source and the snapshot only has to agree with it.
+ *
+ * Lives at module scope because both the tab ORDER and the tab LABEL need it, and
+ * the order is decided where the cards are built — before the component's later
+ * locals exist.
+ *
+ * @param group - a catalogue group.
+ * @param providerState - the published per-provider state, possibly empty.
+ * @returns the region token, or undefined for a provider that is not a deployment.
+ */
+function regionOfGroup(group, providerState) {
+  const published = providerState?.[group?.id]?.region
+  if (typeof published === 'string' && published.length > 0) return published
+  const id = String(group?.id ?? '')
+  const at = id.lastIndexOf('/')
+  return at > 0 ? id.slice(at + 1) : undefined
+}
+
+/**
+ * How early a deployment is listed inside its card: lower is earlier.
+ *
+ * @param group - a catalogue group.
+ * @param providerState - the published per-provider state, possibly empty.
+ * @returns the rank; an unknown region ranks with the rest.
+ */
+function deploymentRank(group, providerState) {
+  const at = REGION_ORDER.indexOf(regionOfGroup(group, providerState))
+  return at === -1 ? REGION_ORDER.length : at
+}
+
+/**
+ * List one card's sections in the deployment order.
+ *
+ * Ties keep their incoming order — stated with the original index rather than
+ * left to the engine's stability, the same way `orderByProvider` does it: "the
+ * order the plugin registered is preserved" is part of the contract, not an
+ * implementation detail. A copy is returned; the caller's array is untouched.
+ *
+ * @param sections - the card's sections, in encounter order.
+ * @param providerState - the published per-provider state, possibly empty.
+ * @returns a new array, mainland deployment first.
+ */
+function orderSections(sections, providerState) {
+  return sections
+    .map((section, index) => ({ section, index, rank: deploymentRank(section.group, providerState) }))
+    .sort((left, right) => left.rank - right.rank || left.index - right.index)
+    .map((entry) => entry.section)
 }
 
 /** Longest common prefix of two strings, used to name a merged card. */
@@ -465,7 +550,7 @@ export function createModelPicker(React) {
      * then by model id — both match the catalogue verbatim, so no lookup table.
      */
     const stateSnapshot = useSnapshot(props.modelStateSource)
-    const providerState = stateSnapshot?.providers ?? {}
+    const providerState = stateSnapshot?.providers ?? NO_PROVIDERS
     /**
      * Whether ANY provider plugin publishes state in this composition.
      *
@@ -529,15 +614,16 @@ export function createModelPicker(React) {
         }
         card.sections.push(entry)
       }
+      // A card's deployments are listed by REGION, not by encounter order: the
+      // zero-model append above is what perturbs the encounter order (see
+      // REGION_ORDER). This runs inside the card only — it never reorders the
+      // cards themselves, and a provider that is not a deployment keeps its place.
+      for (const card of order) card.sections = orderSections(card.sections, providerState)
       // Provider order, not catalogue order — and it holds while searching too, so
       // a card does not jump around as the query narrows the list to it.
       return orderByProvider(order, (card) => card.key)
-    }, [filtered, stateOnlySections])
+    }, [filtered, stateOnlySections, providerState])
 
-    const busyWord = (busy) => busy === 'idle' ? t.busyIdle
-      : busy === 'busy' ? t.busyBusy
-        : busy === 'congested' ? t.busyCongested
-          : t.rateUnknown
     /**
      * The tooltip's wording: the dot's colour already says how bad it is, so the
      * label spells it out — the degree the panel's own tooltip names, which the
@@ -904,22 +990,12 @@ export function createModelPicker(React) {
         }, h(Refresh, { h, spinning: working })))
     }
     /**
-     * Which deployment a provider is, read from the id when state is still in flight.
+     * Which deployment a provider is, bound to this render's published state.
      *
-     * `region` from the published snapshot is authoritative, but it arrives
-     * asynchronously — the first frames of the panel would then name the tab from
-     * the English display name and relabel it a moment later, which reads as a
-     * language flip. The provider id carries the same token synchronously
-     * (`…/cn`, `…/intl`), so the id is used as the immediate source and the
-     * snapshot only has to agree with it.
+     * The rule itself is at module scope (`regionOfGroup`) because the tab ORDER
+     * needs it too, and that is decided before this point in the component.
      */
-    const regionOf = (group) => {
-      const published = providerState?.[group.id]?.region
-      if (typeof published === 'string' && published.length > 0) return published
-      const id = String(group.id ?? '')
-      const at = id.lastIndexOf('/')
-      return at > 0 ? id.slice(at + 1) : undefined
-    }
+    const regionOf = (group) => regionOfGroup(group, providerState)
     const regionLabel = (region) => region === 'cn' ? t.regionCn
       : region === 'intl' ? t.regionIntl
         : undefined

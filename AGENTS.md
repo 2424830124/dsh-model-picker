@@ -238,8 +238,10 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 3. WorkBuddy 卡片自己的强调色 `#12bfa0`（`.dmp-card[data-accent="workbuddy"]`）：那是那个插件的
    身份色，宿主没有对应的令牌。它只在 `CARD_ACCENTS` 列出的卡片上生效，别的卡片仍是共享蓝。
 
-`test/unit/client.mjs` 扫样式表里的字面色值，白名单就是上面这几项；加新的字面色值要同时改测试，
-否则测试会红——这是有意的。
+`test/unit/client.mjs` 扫**整张**样式表里的字面色值（不是某一段），白名单就是上面这几项；加新的字面色值
+要同时改测试，否则测试会红——这是有意的。扫描范围曾经按 `/* Reasoning effort:` 这条注释切开，只扫滑杆
+以下半张：上半张（含 WorkBuddy 的青绿）从来不查，而且那条注释一改名，`split()[1]` 就变成 undefined，
+测试从「断言失败」退化成 TypeError。别再用注释当切分点。
 
 ### 10. 滑杆的形状用 `clip-path` + SVG 描边，不用 `border-radius`
 
@@ -384,7 +386,8 @@ CSS 选择器够不着；所以 `ModelPicker` 自己算一遍挂到按钮上。�
   loggedIn, pending, credits, models: { [modelId]: { name, verdict, busy, rate } } } } }`；
 - `verdict` 是**语言无关的英文 token**（`available` / `unusable` / `no permission` /
   `credentials rejected` / `out of credits` / `rate limited` / `unknown`），由我们翻译成中文，
-  别指望对方发中文——它上一版就是发中文字符串，切语言就崩；
+  别指望对方发中文——它上一版就是发中文字符串，切语言就崩。字典里只列**会被打印出来的**那几个：
+  `available` / `unknown` 属于「可用」，走的是倍率那一列，永远不会进 `t.verdict`；
 - `busy` 是 `idle` / `busy` / `congested` / `unknown`；`rate` 是展示串（`0.23x` / `free` / `unknown`），
   **不提供数值**，要排序得自己解析；
 - 服务**是可选的**：`src/client.js` 用 `createProviderStateSource(scope, name)` 晚绑定地包一层，
@@ -419,6 +422,14 @@ CSS 选择器够不着；所以 `ModelPicker` 自己算一遍挂到按钮上。�
   repeat(2, minmax(0, 112px))` + `justify-content: center`，列间距 10px），文字在列内居中，下划线跟着
   列宽走——两列占满整张卡时两个词会被推到两头，看着像两件事，收窄成一组才像同一组选项；112px 是装得下
   「积分 1766.68 ⟳」的最小宽度，再窄账户行就要换行。
+- **卡内部署的顺序按 region 固定：大陆版在左、海外版在右**（`REGION_ORDER` → `orderSections`，都在
+  `src/ui/ModelPicker.js` 模块作用域）。**不是**目录里的遇到顺序——那条顺序会被 `stateOnlySections` 扰动：
+  目录只在 provider 有可选模型时才列出它，某一刻大陆版的所有模型都不可用，它就从 `groups` 里消失，只能由
+  快照补成零模型小节，而那个补位**追加在 `intl` 之后**，于是海外版跑到左边；卡片默认激活 `sections[0]`，
+  就跟着开在海外版上（2026-11-11 那次报障的现场：`cn: 0/27 个可选`、`intl: 2/20`）。
+  region token 和 `regionLabel` 用的是同一套词表，**没有 provider 白名单**；两边都认不出 region 的（普通的
+  单 provider）保持原序，平局按原下标显式打破，不依赖引擎的排序稳定性。账户行跟着 section 走，所以顺序
+  改一处、标签和余额一起对。（这条只排卡内，`orderByProvider` 只排卡片，两者互不越界。）
 - **每个部署标签下带一行账户状态**：已登录显示「积分 <数值> ⟳」，未登录显示「登录」按钮。数据是快照里的
   `loggedIn` / `credits`；动作调 provider 服务的 `refreshCredits(region)` / `login(region)`，参数传
   **完整 provider id**（那个服务三种写法都收，传 id 最不容易错）。刷新时图标转圈、按钮 disable；
@@ -482,8 +493,9 @@ CSS 选择器够不着；所以 `ModelPicker` 自己算一遍挂到按钮上。�
   **积分 加载中…**。判断"在加载"用的是 `stateAvailable`（服务返回了对象、只是 `providers` 为空）——
   如果整个组合里根本没有发布状态的插件，服务返回 `undefined`，此时**不要**占位，否则一个多 provider
   但没状态的插件会永远顶着"未知"。
-- **卡片头就是折叠开关，折叠状态跨会话记忆。** 卡片头在无搜索时渲染成 `button.dmp-card-head`
-  （`aria-expanded`），点击切换；折叠的卡片不渲染卡片体。
+- **卡片头里就是折叠开关，折叠状态跨会话记忆。** 卡片头那一行永远是 `div.dmp-card-head`，里面的
+  折叠控件在无搜索时渲染成 `button.dmp-card-head-toggle`（`aria-expanded` 挂它），点击切换；
+  折叠的卡片不渲染卡片体。
   状态存在 localStorage 的 `dsh-model-picker.collapsed-cards`，**只存折叠的卡片 key**（合并卡存包前缀，
   单 provider 存 provider id；不在表里 = 展开），provider 消失再回来时自然自洽。选这个通道是因为
   客户端的 Cordis 配置运行期只读、没有写回路径——官方客户端插件（侧栏宽度、会话草稿、快捷键）也都

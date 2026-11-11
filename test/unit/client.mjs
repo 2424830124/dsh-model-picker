@@ -152,15 +152,13 @@ const React = {
 
 /** The catalogue a session directory hands its component. */
 const catalog = {
-  default: { provider: 'workbuddy-cn', model: 'hy3' },
   groups: [
     { id: 'workbuddy-cn', name: 'WorkBuddy (Mainland)', models: [
       { id: 'hy3', name: 'Hy3', reasoning: { efforts: [{ id: 'low', name: '快速' }, { id: 'high', name: '深思' }], defaultEffort: 'low' } },
       { id: 'glm-5.3', name: 'GLM-5.3' }
     ] },
     { id: 'deepseek-account', name: 'DeepSeek', models: [{ id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' }] }
-  ],
-  failures: []
+  ]
 }
 
 /** A session directory shaped exactly like the shipped one. */
@@ -546,13 +544,20 @@ assert.ok(texts(openTree).includes('WorkBuddy (Mainland)'), 'groups are labelled
 
   // The pinned package is matched as a PREFIX, so both deployments land in the
   // same leading card and a third one would too, without an edit to the rule.
-  // Inside the card the tabs keep catalogue order — this rule reorders cards, it
-  // does not reorder the deployments a plugin registered.
+  //
+  // Inside the card the deployments are listed by REGION, not in the order the
+  // plugin registered them: the catalogue quietens a provider that offers no model
+  // right now and the state-only append puts it back at the END, so encounter
+  // order is not stable — the mainland deployment slid right, and the card (which
+  // opens on its first section) silently opened on the overseas one instead.
+  // This fixture registers `intl` BEFORE `cn` on purpose: the tabs must come out
+  // mainland-first anyway.
   const lead = collect(render()).filter((node) => node.props.role === 'group')[0]
   assert.deepEqual(collect(lead)
     .filter((node) => String(node.props.className ?? '').split(' ').includes('dmp-card-tab'))
-    .map((node) => node.children[0]), ['海外版', '大陆版'],
-  'every deployment of the pinned package is in the leading card')
+    .map((node) => [node.children[0], node.props['aria-pressed']]),
+  [['大陆版', true], ['海外版', false]],
+  'the deployments of the pinned package lead the card in region order — and it opens on the leftmost')
 
   // A search narrows the list but must not reshuffle it: the surviving card keeps
   // its place instead of jumping to the top as the only result.
@@ -843,6 +848,55 @@ assert.ok(texts(openTree).includes('WorkBuddy (Mainland)'), 'groups are labelled
       'and with it the way back in')
   }
 
+  // A deployment the catalogue has dropped must not slide to the right.
+  //
+  // The catalogue lists a provider only while it offers a model, so a deployment
+  // whose models are all unavailable right now vanishes from `groups`; the
+  // provider plugin's own snapshot is what puts its tab back, through
+  // `stateOnlySections` — and that append lands AFTER the deployments the
+  // catalogue did list. Encounter order therefore put the surviving deployment on
+  // the LEFT and, because a card opens on its first section, made it the tab the
+  // card opened on. That is the arrangement this panel was reported showing, with
+  // the mainland deployment (and its balance) pushed to the right.
+  {
+    const half = createDirectory({ current: { provider: `${pkg}/intl`, model: 'hy3' } })
+    half.__set({ groups: [
+      { id: `${pkg}/intl`, name: 'WorkBuddy (Overseas)', models: [{ id: 'hy3', name: 'Hy3' }] }
+    ] })
+    const halfMount = mount({ directory: half })
+    const halfProps = {
+      ...props,
+      ...halfMount.options.inject('session-1'),
+      modelStateSource: {
+        getSnapshot: () => ({ version: 1, updatedAt: 21, providers: {
+          [`${pkg}/cn`]: { region: 'cn', displayName: 'WorkBuddy (Mainland)', loggedIn: true, credits: 1159.97, models: {} },
+          [`${pkg}/intl`]: { region: 'intl', displayName: 'WorkBuddy (Overseas)', loggedIn: true, credits: 0, models: {
+            hy3: { name: 'Hy3', verdict: 'available', busy: 'idle', rate: 'free' }
+          } }
+        } }),
+        subscribe: () => () => {},
+        refresh: async () => {},
+        login: async () => {},
+        refreshCredits: async () => {}
+      }
+    }
+    hookState.length = 0
+    hookIndex = 0
+    collect(halfMount.component(halfProps)).filter(isTrigger)[0].props.onClick()
+    hookIndex = 0
+    const halfCard = collect(halfMount.component(halfProps)).filter((node) => node.props.role === 'group')[0]
+    assert.equal(halfCard.props['aria-label'], 'WorkBuddy', 'the dropped deployment still shares the card')
+    assert.deepEqual(collect(halfCard)
+      .filter((node) => String(node.props.className ?? '').split(' ').includes('dmp-card-tab'))
+      .map((node) => [node.children[0], node.props['aria-pressed']]),
+    [['大陆版', true], ['海外版', false]],
+    'the deployment the catalogue dropped is listed by region, not appended after the listed one')
+    assert.deepEqual(collect(halfCard)
+      .filter((node) => String(node.props.className ?? '').includes('dmp-card-credits'))
+      .map((node) => node.children[0]), ['积分 1159.97', '积分 0'],
+    'and each tab carries its own account row, in the same order')
+  }
+
   // Right after signing in, the credentials exist but the catalogue has not
   // registered the models yet. The card must survive that window instead of
   // vanishing; the tab says there is nothing to pick yet.
@@ -1042,8 +1096,6 @@ await new Promise((resolve) => setTimeout(resolve, 0))
   assert.equal(ticks.length, 2, 'each declared effort remains a clickable label')
   assert.equal(ticks[0].props['aria-pressed'], true, 'the active level is addressable')
   assert.equal(ticks[1].props['aria-pressed'], false, 'inactive levels are not announced as selected')
-  assert.equal(ticks[0].props['data-edge'], 'start', 'the first label stays inside the popover')
-  assert.equal(ticks[1].props['data-edge'], 'end', 'the last label stays inside the popover')
   assert.ok(texts(levelPanel).includes('更高的强度通常需要更多思考时间。'), 'the effort hint is localised')
   assert.ok(texts(levelPanel).some((text) => text.includes('深思')),
     'every declared level is labelled under the rail')
@@ -1229,8 +1281,6 @@ await new Promise((resolve) => setTimeout(resolve, 0))
   assert.equal(loneSlider.props.style['--dmp-effort-at'], '50%', 'a lone stop is centred')
   assert.equal(one.nodes.find((node) => node.props.type === 'range').props.disabled, true,
     'a lone effort has no draggable range')
-  assert.equal(one.nodes.find((node) => node.props['aria-pressed'] === true).props['data-edge'], undefined,
-    'a lone label is centred rather than edge-aligned')
 
   const levels = ['off', 'minimal', 'low', 'medium', 'high', 'max'].map((id) => ({ id, name: id }))
   const many = effortView(levels, 'max', true, 'en-US')
@@ -1243,8 +1293,12 @@ await new Promise((resolve) => setTimeout(resolve, 0))
   assert.ok(many.nodes.filter((node) => node.props.className?.includes('dmp-slider-tick'))
     .every((node) => node.props.disabled === true), 'all jump targets respect a locked composer')
 
-  const css = readFileSync(new URL('src/ui/styles.js', root), 'utf8').split('/* Reasoning effort:')[1]
-  // Theme tokens everywhere, with two deliberate exceptions.
+  // The WHOLE stylesheet, not a slice: splitting on a comment marker used to hide
+  // every literal above it (the WorkBuddy accent among them) and would turn into a
+  // TypeError the moment that comment was renamed.
+  const css = readFileSync(new URL('src/ui/styles.js', root), 'utf8')
+  assert.ok(css.includes('export const CSS'), 'the stylesheet source was read, not some stray file')
+  // Theme tokens everywhere, with three deliberate exceptions:
   //
   // 1. Pure black and pure white. Those read the same in both themes (an outline must
   //    look like an outline, a knob must look raised), so a token would only make them
@@ -1253,8 +1307,13 @@ await new Promise((resolve) => setTimeout(resolve, 0))
   //    dark-background hues Codex's own TUI uses for its Ultra (violet) and Max
   //    (amber) tiers, adopted so the two highest levels match that convention. The
   //    host exposes no token for them, and inventing one via color-mix would drift
-  //    from the source values. Any other mid-tone literal is still rejected.
-  const TIER_ACCENTS = ['ba82ff', 'f7c473']
+  //    from the source values.
+  // 3. The WorkBuddy identity teal: that plugin's own accent, scoped to
+  //    [data-accent="workbuddy"]; no host token resolves to it.
+  //
+  // Any other mid-tone literal is rejected — anywhere in the sheet, not just below
+  // the slider.
+  const TIER_ACCENTS = ['ba82ff', 'f7c473', '12bfa0']
   const literals = [...css.matchAll(/(#[0-9a-f]{3,8}\b|rgba?\([^)]*\))/gi)].map((m) => m[0])
   const forbidden = literals.filter((value) => {
     const hex = /^#([0-9a-f]{3,8})$/i.exec(value)
@@ -1268,18 +1327,22 @@ await new Promise((resolve) => setTimeout(resolve, 0))
   assert.deepEqual(forbidden, [],
     'effort styles use theme tokens, never mid-tone literal colours')
   // The tier colours must actually be wired to the two top stops, not merely allowed
-  // by the filter above. The block is matched from its selector through its closing
-  // brace, so a rule that loses its colour fails even if the value still appears
-  // somewhere else in the sheet.
+  // by the filter above. Each hex is traced back to the rule that DECLARES it (the
+  // selector between the previous '}' and this '{'), so a rule that loses its colour
+  // fails even if the value still appears somewhere else in the sheet — and a rule
+  // that merely reads var(--dmp-accent) cannot satisfy the check by accident.
   const flat = css.replace(/\s+/g, ' ')
-  const tierBlock = (tier) => {
-    const at = flat.indexOf(`[data-tier="${tier}"]`)
+  const declaringSelector = (hex) => {
+    const at = flat.indexOf(hex)
     if (at < 0) return ''
-    const close = flat.indexOf('}', at)
-    return close < 0 ? '' : flat.slice(at, close)
+    const open = flat.lastIndexOf('{', at)
+    const close = flat.lastIndexOf('}', at)
+    return open < 0 ? '' : flat.slice(close + 1, open)
   }
-  assert.match(tierBlock('top'), /ba82ff/, 'the top level takes the violet tier accent')
-  assert.match(tierBlock('high'), /f7c473/, 'the second-highest level takes the amber tier accent')
+  assert.match(declaringSelector("ba82ff"), /\[data-tier="top"\]/,
+    'the top level takes the violet tier accent')
+  assert.match(declaringSelector("f7c473"), /\[data-tier="high"\]/,
+    'the second-highest level takes the amber tier accent')
   assert.ok(css.includes('prefers-reduced-motion'), 'the effort view respects reduced motion')
 }
 
